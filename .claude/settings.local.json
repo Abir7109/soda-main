@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(ping *)",
+      "Bash(taskkill *)",
+      "Bash(cmd *)",
+      "Bash(soda_env\\\\Scripts\\\\activate)",
+      "Bash(pip install *)"
+    ]
+  }
+}

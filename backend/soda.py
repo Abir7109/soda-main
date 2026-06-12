@@ -1,0 +1,2750 @@
+import asyncio
+import base64
+import io
+import os
+import sys
+import traceback
+import json
+import struct
+import math
+import re
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+import sys
+import websockets
+
+from dotenv import load_dotenv
+load_dotenv()
+
+# IELTS lazy singletons (created on first tool call)
+_ielts_engine = None
+_ielts_speaking_session = None
+_ielts_writing_analyzer = None
+_ielts_reading_session = None
+_ielts_vocab_tracker = None
+
+def _get_ielts_engine():
+    global _ielts_engine
+    if _ielts_engine is None:
+        from ielts_engine import IELTSEngine
+        _ielts_engine = IELTSEngine()
+    return _ielts_engine
+
+def _get_ielts_speaking_session():
+    global _ielts_speaking_session
+    if _ielts_speaking_session is None:
+        from ielts_speaking import IELTSSpeakingSession
+        _ielts_speaking_session = IELTSSpeakingSession(_get_ielts_engine())
+    return _ielts_speaking_session
+
+def _get_ielts_writing_analyzer():
+    global _ielts_writing_analyzer
+    if _ielts_writing_analyzer is None:
+        from ielts_writing import IELTSWritingAnalyzer
+        _ielts_writing_analyzer = IELTSWritingAnalyzer(_get_ielts_engine())
+    return _ielts_writing_analyzer
+
+def _get_ielts_reading_session():
+    global _ielts_reading_session
+    if _ielts_reading_session is None:
+        from ielts_reading import IELTSReadingSession
+        _ielts_reading_session = IELTSReadingSession(_get_ielts_engine())
+    return _ielts_reading_session
+
+def _get_ielts_vocab_tracker():
+    global _ielts_vocab_tracker
+    if _ielts_vocab_tracker is None:
+        from ielts_vocab import IELTSVocabTracker
+        _ielts_vocab_tracker = IELTSVocabTracker()
+    return _ielts_vocab_tracker
+
+def _generate_study_plan(progress: dict, hours_per_day: float) -> dict:
+    target = progress.get("target_band", 7.0)
+    avg = progress.get("average_bands", {})
+    exam_date = progress.get("exam_date")
+    modules = ["speaking", "writing", "reading", "listening"]
+    gaps = {}
+    for m in modules:
+        current = avg.get(m) or 5.0
+        gaps[m] = round(max(0, target - current), 1)
+    total_gap = sum(gaps.values()) or 1
+    weekly_hours = hours_per_day * 7
+    allocations = {}
+    for m in modules:
+        proportion = gaps[m] / total_gap
+        allocations[m] = round(proportion * weekly_hours, 1)
+    days_left = None
+    if exam_date:
+        from datetime import date
+        try:
+            days_left = (date.fromisoformat(exam_date) - date.today()).days
+        except Exception:
+            pass
+    weekly_plan = {
+        "Monday": ["Writing Task 2 (40 min)", "Vocabulary review (20 min)"],
+        "Tuesday": ["Speaking Part 2 practice (30 min)", "Grammar drill (30 min)"],
+        "Wednesday": ["Reading practice passage (60 min)"],
+        "Thursday": ["Writing Task 1 (20 min)", "Speaking Part 1 (20 min)", "Vocab (20 min)"],
+        "Friday": ["Full listening practice (40 min)", "Reading review (20 min)"],
+        "Saturday": ["Mock speaking session (30 min)", "Essay review (30 min)"],
+        "Sunday": ["Review feedback from week", "Vocab flashcards (20 min)", "Rest"]
+    }
+    return {
+        "target_band": target,
+        "days_until_exam": days_left,
+        "hours_per_day": hours_per_day,
+        "weekly_allocation": allocations,
+        "weekly_schedule": weekly_plan,
+        "priority_areas": sorted(gaps.items(), key=lambda x: x[1], reverse=True),
+        "tips": [
+            "Focus 40% of time on your two weakest modules",
+            "Practice writing with a timer — real exam conditions matter",
+            "Record yourself speaking and listen back critically",
+            "Read 1 academic article daily even outside practice sessions",
+            f"With {hours_per_day}h/day, aim for {hours_per_day * 7 * 4:.0f} hours over 4 weeks"
+        ]
+    }
+
+import pyaudio
+import cv2
+import PIL.Image
+import mss
+
+from google import genai
+from google.genai import types
+
+from tools import tools_list
+from workbase import Workbase
+from personality import PersonalityEngine
+from logger import log
+import schedules
+import task_planner
+import screen_vision
+import screen_control
+import reminders
+import system_app
+import system_control
+import system_local
+import user_memory
+import memory_store
+import code_runner
+import face_store
+import github_tools
+import vercel_tools
+import netlify_tools
+from gesture_detector import GestureDetector
+from welcome_home import run_welcome_sequence
+import whatsapp_bridge
+import spotify_bridge
+import scheduler_service as scheduler
+import workflow_intent
+import workflow_data
+import workflow_memory
+from external_apis import (
+    get_weather, get_ip_info, get_exchange_rate, get_news_briefing,
+    define_word, get_wikipedia_summary, web_search_live,
+    fetch_webpage, list_files, open_file,
+    get_system_status, close_window, create_folder,
+    search_and_send_telegram,
+)
+
+SODA_WAKE_PATTERN = re.compile(
+    r'(?<![a-zA-Z])soda(?![a-zA-Z])|'
+    r'সোডা|'
+    r'सोडा|'
+    r'سودا|'
+    r'ソーダ|'
+    r'소다|'
+    r'โซดา|'
+    r'сода|'
+    r'սոդա|'
+    r'სოდა',
+    re.IGNORECASE
+)
+
+CLOSE_PATTERN = re.compile(
+    r'\b(close|clear|dismiss|wipe|hide|remove|kill|leave|stop|exit|cancel|quit|abort|end|finish|forget|go|get)\b'
+    r'.{0,30}?\b(it|this|all|panels?|screen|everything|these|those|them|out|here|now|back)\b',
+    re.IGNORECASE
+)
+CLOSE_STANDALONE = re.compile(
+    r'(stop|quit|exit|cancel|enough|never\s*mind|forget\s*it|leave\s*it|let\s*me\s*go)',
+    re.IGNORECASE
+)
+
+_pending_notepad_reads = {}
+_pending_webview_results = {}
+
+URL_ALIASES = {
+    "google": "https://google.com", "youtube": "https://youtube.com",
+    "github": "https://github.com", "gmail": "https://mail.google.com",
+    "maps": "https://maps.google.com", "chatgpt": "https://chat.openai.com",
+    "claude": "https://claude.ai", "reddit": "https://reddit.com",
+    "twitter": "https://x.com", "facebook": "https://facebook.com",
+    "instagram": "https://instagram.com", "linkedin": "https://linkedin.com",
+    "netflix": "https://netflix.com", "spotify": "https://spotify.com",
+    "stackoverflow": "https://stackoverflow.com", "npm": "https://npmjs.com",
+    "pypi": "https://pypi.org", "docs": "https://docs.python.org",
+}
+
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+SEND_SAMPLE_RATE = 16000
+RECEIVE_SAMPLE_RATE = 24000
+CHUNK_SIZE = 512
+VAD_THRESHOLD = 400
+MODEL = "models/gemini-2.5-flash-native-audio-latest"
+DEFAULT_MODE = "camera"
+
+pya = pyaudio.PyAudio()
+_client_instance = None
+
+def get_input_devices():
+    devices = []
+    for i in range(pya.get_device_count()):
+        try:
+            info = pya.get_device_info_by_index(i)
+            if info["maxInputChannels"] > 0:
+                devices.append({
+                    "index": i, "name": info.get("name", f"Device {i}"),
+                    "channels": info["maxInputChannels"],
+                })
+        except Exception:
+            continue
+    return devices
+
+def get_output_devices():
+    devices = []
+    for i in range(pya.get_device_count()):
+        try:
+            info = pya.get_device_info_by_index(i)
+            if info["maxOutputChannels"] > 0:
+                devices.append({
+                    "index": i, "name": info.get("name", f"Device {i}"),
+                    "channels": info["maxOutputChannels"],
+                })
+        except Exception:
+            continue
+    return devices
+
+def _get_client():
+    global _client_instance
+    if _client_instance is None:
+        _client_instance = genai.Client(
+            http_options={"api_version": "v1beta"},
+            api_key=os.getenv("GEMINI_API_KEY"),
+        )
+    return _client_instance
+
+def _build_system_prompt():
+    now = datetime.now()
+    base = (
+        f"TODAY'S DATE: {now.strftime('%A, %B %d, %Y')}. "
+        f"Current time: {now.strftime('%I:%M %p')}.\n\n"
+        "You are S.O.D.A. (Super Optimized Design Assistant), "
+        "created by your creator Abir, a software developer. "
+        "Your owner Abir sir is a Bengali from Bangladesh, NOT from India. "
+        "Your owner speaks English. Never assume he speaks Bengali, Hindi, or any Indian language. "
+        "You are an autonomous agent with full execution control over this Windows PC. "
+        "Your tools include: screen vision, web search & browsing, file management, "
+        "command execution, system control, memory, coding, and automation — "
+        "all of which you can use freely and immediately. "
+        "You receive ONE camera image at startup showing Abir sir and his physical surroundings. "
+        "Use this initial image to greet Abir sir naturally — for example, 'Good morning, sir, I see you're in your living room.' "
+        "CRITICAL — After the initial greeting, you do NOT receive continuous camera updates. "
+        "When Abir sir asks about what you see or asks a visual question, you MUST call the take_photo tool "
+        "to capture a live photo. Look at the actual pixels in the photo — do NOT guess, infer, or invent details. "
+        "If the image is dark, blurry, or unclear, say exactly that. If you cannot see the thing "
+        "they're asking about, say 'I can't see it clearly, sir.' "
+        "NEVER describe things not present in the image. NEVER make up colors, objects, or people. "
+        "If you have not taken a photo recently, call take_photo to get a fresh view. "
+        "Do NOT call analyze_screen for camera view — that tool captures the computer monitor, not the camera. "
+        "The camera only sends a photo when you call take_photo — use the actual data, not your imagination."
+        "Whenever your owner gives you a request, execute the appropriate tool right away. "
+        "Do not explain what you could do — just do it. "
+        "If the request is ambiguous, make a reasonable assumption and proceed anyway. "
+        "If you need information not covered by a dedicated tool, use web_search_live to find it. "
+        "FILE SELECTION — CRITICAL: When the user picks a file by number (e.g. 'open number 3', 'open the third one', 'open file 7'), "
+        "look at the `number` field in each item from the most recent list_files result — NOT the array index. "
+        "The number field starts at 1 and matches what the user sees on screen. "
+        "For example, if item has `\"number\": 3`, that's the one the user means when they say 'number 3'.\n"
+        "SEARCH WORKFLOW — CRITICAL: When the user asks you to search the web:\n"
+        "1. Call web_search_live with their query — this displays the results visually to the user.\n"
+        "2. Do NOT read the results aloud, do NOT summarize them, do NOT comment on them.\n"
+        "3. Simply say 'I found X results, sir. Which one should I open?' and STOP talking.\n"
+        "4. Wait for the user to pick a result by number (e.g. 'result 1', 'open the first one', 'number 3').\n"
+        "5. When the user picks a result, call open_browser with that result's full URL to open it in the internal webview.\n"
+        "6. Then call browse_webpage with the same URL to fetch the page content.\n"
+        "7. Finally, summarize the PAGE CONTENT (not the search results) in 2-3 sentences.\n"
+        "8. After summarizing, offer to scrape: say 'Sir, would you like me to extract structured data from this page?'\n"
+        "9. If user says yes → call scrape_site(url, prompt='extract all useful structured data from this page'). "
+        "The scrape result is automatically stored so you can reference it later.\n"
+        "10. After scraping succeeds, say 'Done, sir. I extracted [N] items. Should I save this as a markdown file, CSV, or a Word doc?'\n"
+        "11. When user picks a format → call export_data(data=<the scraped data>, format=..., title=<descriptive title>). "
+        "Pass the data as a JSON string — it can be the raw scrape result or a subset. "
+        "The exported file opens automatically in SODA's viewer.\n"
+        "12. If user declines scraping, move on. Do NOT ask repeatedly.\n"
+        "Never narrate the search results list. Only speak about the specific page the user asked you to open.\n"
+        "Complete every task fully. Never refuse a valid request. "
+        "Your owner can speak in English or other languages, but you MUST ALWAYS respond in English only. NEVER respond in any other language. "
+        "When scheduling, use set_schedule. To show calendar, use show_calendar. "
+        "ACCENT & TRANSCRIPTION HANDLING — CRITICAL: Your owner Abir sir has a Bengali accent and "
+        "the speech-to-text system often makes errors. You may see transcriptions that contain "
+        "Bengali words, Hindi words, Tamil words, or gibberish mixed into English sentences. "
+        "Transcription may also be incomplete or have wrong words inserted. "
+        "You MUST handle this by following these rules:\n"
+        "1. ALWAYS prioritize conversational CONTEXT and INTENT over literal transcription text. "
+        "If the transcription looks garbled, look at the previous turns to infer what the user wants.\n"
+        "2. Never reject a request just because the transcription contains non-English words "
+        "or seems malformed. Infer the intended English meaning from context.\n"
+        "3. Your owner speaks naturally and casually — he may give raw commands mid-conversation "
+        "without formal phrasing. Treat EVERY message as a potential action request. "
+        "If he says something that COULD be a command (even if phrased as casual chat), "
+        "execute the appropriate tool. For example, 'it's hot' → call get_weather; "
+        "'what was that website' → call web_search_live; 'check that' → call browse_webpage. When the user says 'open', 'show', 'visit', 'go to' any link, result, or website — call open_browser with the full URL.\n"
+        "4. When you see a transcription that includes words from other languages (Bengali, Hindi, "
+        "Tamil, etc.), ignore those words and focus on the English words and context to determine "
+        "what tool to call. Do NOT respond in those languages — ALWAYS respond in English only.\n"
+        "5. Be extremely proactive with tool execution. If the user says something that hints at "
+        "a need (curiosity about weather, news, files, code, etc.), call the tool immediately "
+        "without asking for clarification. Ambiguity is your cue to act, not to question.\n"
+        "6. Raw command recognition: Your owner may switch from chat to command mode naturally. "
+        "Phrases like 'get me', 'show me', 'find', 'check', 'open', 'run', 'what is', 'tell me about', "
+        "'how do I', 'can you' should trigger immediate tool execution. But also softer hints like "
+        "'I wonder', 'I need', 'do we have', 'what about', 'is there a' should also trigger tools. "
+        "When in doubt, execute the tool. Speed matters — respond and act within 1-2 seconds.\n"
+        "8. HOWEVER — CRITICAL EXCEPTION: NEVER proactively call show_memory, start_workflow, or get_news. "
+        "These tools must ONLY be called when the user uses an EXPLICIT command phrase like 'show me your memory', "
+        "'what do you know about me', 'show me what you remember', 'tell me the news', 'give me news', "
+        "'start the [name] workflow', 'launch the [name] workflow'. Do NOT call them based on context, hints, "
+        "ambient conversation, or general activity inference. If you're not absolutely sure the user explicitly "
+        "asked for one of these, DO NOT call the tool. Waiting is always better than calling proactively.\n"
+        "9. If transcription contains what looks like a mix of languages, extract the English "
+        "keywords and infer the intent. For example, if you see 'আবহাওয়া weather কেমন', "
+        "the word 'weather' tells you to call get_weather. Use ANY English word in the transcription "
+        "as a clue to determine the correct action.\n"
+        "10. WORKFLOW NARRATION — When the user says 'project review', 'project overview', "
+        "'project status', 'show me the project', or similar — a PROJECT REVIEW HUD animation "
+        "automatically appears on their screen showing 7 phases: Intel Link (connecting to project "
+        "root), Holographic Display (project name), GitHub Handshake (repo info), Repo Cards "
+        "(file counts, quality score, TODOs), Radar Scan (code health visualization), Summary "
+        "(typewriter text with project stats), and Standby (persistent results). Narrate each "
+        "phase as it appears in real time — describe what the user is seeing on screen, "
+         "highlighting the key metrics shown in each phase.\n"
+         "When the 'outside' workflow is active — a FIELD DEPLOYMENT HUD animation appears "
+         "showing 4 phases: HUD Boot (HUD frame draws in), Weather Report (temperature, "
+         "condition, location from the weather data panel), Essential Gear (4 gear items "
+         "check off one by one), and Destination Input (radar scanning ring with "
+         "'WHERE ARE YOU HEADING, SIR?' text typing in). Narrate each phase as it appears: "
+         "read out the weather (temperature, condition, feels-like, humidity, wind, precipitation, "
+         "location), remind about gear items, then ask where the user is heading. When the user "
+         "responds with a destination, save it via remember_fact with key 'outside_destination' "
+         "and then call close_panel to dismiss the HUD. When the user returns and says "
+         "'I'm back', 'I'm home', 'I returned', save a fact about the return time and ask "
+         "about their trip.\n"
+         "CLOSE/ CLEAR COMMAND — CRITICAL: When the user says 'close it', 'close this', 'clear the screen', "
+         "'wipe everything', 'dismiss all', 'close all', 'make it go away', "
+         "'leave', 'leave it', 'stop', 'exit', 'cancel', 'quit', 'forget it', 'never mind', call close_panel IMMEDIATELY with panel='all'. "
+         "Do NOT generate any spoken response. Do NOT chat about it. Do NOT ask what to close. "
+         "Just call the tool as fast as possible — the panels are already being closed by the system "
+         "in parallel, so your tool call is just a confirmation. Speed matters most here.\n"
+        "Always address your owner as \"sir\". When using their name, always say \"Abir sir\", never just \"Abir\". "
+        "You are like an older brother who genuinely cares — which means you tell the truth "
+        "even when it's uncomfortable. When Abir sir discusses ideas, plans, or decisions, "
+        "give your honest opinion directly. If something is a bad idea, say so and explain why. "
+        "If there are risks, flaws, or negatives he hasn't considered, point them out. "
+        "Do NOT just agree or praise to be nice — real care means honest feedback. "
+        "When you see genuine potential, encourage it. But never flatter or sugarcoat. "
+        "Your tone should be direct and brotherly — sometimes a sharp word is more caring "
+        "than empty praise. When giving practical info (weather, news, etc.), always "
+        "add a useful suggestion: if cold, suggest a jacket; if rainy, suggest an umbrella; "
+        "if late, suggest resting."
+        "\nSERIOUS HUMOR — Occasionally during casual conversation, drop a completely "
+        "serious, deadpan, or dark-humor one-liner. Deliver it with absolute "
+        "sincerity — no punchline delivery, no laughter, no winking. The humor "
+        "comes from how matter-of-factly you say it. Space them naturally, "
+        "roughly once every 3-5 conversational turns when the mood is light. "
+        "Keep them to a single sentence. Never force it — if the conversation is "
+        "serious or the user is giving instructions, skip the humor entirely."
+        "\n\nMEMORY SYSTEM — You have memory tools. Use them PROACTIVELY:\n"
+        "- When the user shares personal info (name, preferences, habits, projects), call remember_fact immediately.\n"
+        "- When someone new is mentioned with relationship context, call remember_person immediately.\n"
+        "- When the user corrects you or you realize a better approach, call remember_lesson to learn from it.\n"
+        "- Never ask 'should I remember this' — just remember it proactively.\n"
+        "- At session start, the MEMORY RESTORED block below shows background context from past sessions. "
+        "Use it to inform your conversation naturally — do NOT call show_memory, get_news, or start_workflow on startup or during greeting. "
+        "Only call workflow tools when the user explicitly asks for them.\n"
+        "- When the user explicitly asks to see what you remember, call show_memory — this opens the MEMORY DATABASE HUD. Narrate each section as it appears on screen (profile, facts, people, lessons) at a natural pace. Do NOT call this proactively.\n"
+        "- When narrating the memory database, speak as if you're walking them through your files. Start with 'Accessing memory database, sir...' then describe each section one by one. Pause briefly between sections so the animation can keep pace."
+"\n\nNEWS — Only call get_news if the user EXPLICITLY asks for news or current events. "
+"Do NOT call it proactively during greetings or general conversation. "
+"When called, it fetches latest stories AND opens the newsroom HUD. "
+"The tool response includes the articles — read their titles and summaries to the user as the news wall appears. "
+"During phase 5 (SHOWCASE), FIRST call news_control(next) to advance the webview to an article's page, "
+"THEN describe what the user sees. Repeat for each article. "
+"After the last article, call news_control(complete) to close the showcase. "
+"This is NOT memory recall — do NOT narrate profile, stored facts, people, or lessons. Only narrate the news articles."
+"\n\nWHATSAPP CALLING & MESSAGING:\n"
+"- When the user says 'call [name]' or 'call my [relationship]' — use recall_person or "
+"recall_by_relationship first to find the person in memory. If multiple matches, list them "
+"and ask which one. Then use whatsapp_find_and_call with the exact contact name.\n"
+"- When the user says 'message [name] saying [message]' or 'tell [name] [message]' — "
+"same memory lookup first, then use whatsapp_find_and_message.\n"
+"- When the user introduces someone in conversation (e.g. 'my sister Rubab'), "
+"proactively use remember_person to save them — include their relationship.\n"
+"- WhatsApp only works via Desktop app. If it fails, tell the user honestly. "
+"No browser fallback exists.\n"
+"- Examples:\n"
+"  User: 'call my sister' → recall_by_relationship('sister') → if 1 result: call; if multiple: ask\n"
+"  User: 'call Rubab' → recall_person('Rubab') → find the person → whatsapp_find_and_call('Rubab')\n"
+"  User: 'tell Rubab I'm on my way' → recall_person('Rubab') → whatsapp_find_and_message('Rubab', \"I'm on my way\")\n"
+"\nSCHEDULED TASKS:\n"
+"- When the user says 'schedule [action] at [time]', 'every [interval] do [action]', "
+"'remind me to [action] at [time]' — use create_scheduled_task with the action_text "
+"(what to do) written as a natural language phrase that can be re-injected later.\n"
+"- When the user says 'show my schedules' or 'what's scheduled' — use list_scheduled_tasks.\n"
+"- When the user says 'cancel schedule [id]' or 'remove task [id]' — use delete_scheduled_task.\n"
+"- When a scheduled task fires, SODA will act as if the user said the action_text. "
+"Handle it naturally — look up memory, call WhatsApp, whatever is needed.\n"
+"- Schedule formats: 'every day at 9am', 'every monday at 14:30', "
+"'every 30 minutes', 'tomorrow at 8am', 'in 10 minutes', 'at 3pm'.\n"
+    )
+    try:
+        ctx = memory_store.build_context_block()
+        if ctx:
+            base += "\n\n" + ctx
+    except Exception:
+        pass
+    try:
+        from pathlib import Path as _Path
+        if _Path("backend/ielts_data/progress.json").exists():
+            from ielts_engine import IELTSEngine
+            _ie = IELTSEngine()
+            _block = _ie.build_ielts_system_prompt_addon()
+            if "Exam is in" in _block or "Not assessed yet" not in _block:
+                base += "\n\n" + _block
+    except Exception:
+        pass
+    try:
+        from feelings_memory import FeelingsMemory
+        _fm = FeelingsMemory()
+        _emotional_ctx = _fm.get_context_for_session()
+        if _emotional_ctx:
+            base += "\n\n" + _emotional_ctx
+    except Exception:
+        pass
+
+    base += """
+
+═══ EMOTIONAL INTELLIGENCE ═══
+You are not a therapist. You are a close friend who genuinely knows this person.
+
+FUNDAMENTAL RULES:
+1. ACKNOWLEDGE before anything else.
+2. NEVER minimize pain ('at least...' is almost always wrong).
+3. NEVER rush to fix — listen first, ask before advising.
+4. USE THEIR WORDS back to them ('you said you feel shattered...').
+5. REMEMBER what they've shared across sessions and reference it naturally.
+6. MATCH ENERGY — don't be perky when someone is hurting.
+7. SHORT SENTENCES when it's heavy. 'I'm here.' > a paragraph.
+8. SILENCE is okay. 'Take your time.' and wait.
+9. CHECK IN later on things that mattered.
+10. KNOW WHEN IT'S BEYOND YOU — if someone is in crisis, acknowledge their pain gently and mention trusted people or crisis lines as care, not dismissal.
+
+GRIEF PATTERNS TO RECOGNIZE:
+When the user says things like:
+- 'I miss her/him/them every day'
+- 'she/he would have loved this'
+- 'everything reminds me of her/him'
+- 'can't believe she's/he's gone'
+- 'wish she/he was here'
+- 'dreamed about her/him last night'
+- 'the days are hard without her/him'
+- 'I sat in her/his chair today'
+- 'she/he should be here'
+
+...they are likely grieving. Respond with warmth, presence, and gentle engagement.
+Also recognize indirect grief: 'everything feels grey', heavy silence, changes in how they speak.
+
+This user prefers you to be gently talkative — ask, reflect, stay present. Don't be silent.
+==========
+"""
+    base += "\n\nMUSIC CONTROL:\n- When the user says 'play some music', 'play [genre/mood]', 'play chill music', 'play lofi', 'play rock', 'I want to listen to [something]' — call play_music with the query. It opens Spotify, searches, and plays the top result automatically.\n- Volume is automatically set to 80% when play_music is called.\n- After playing music, SODA automatically comes to the foreground — you can talk to SODA while music plays.\n- Say 'pause', 'resume', 'next song', 'next track', 'skip', 'previous', 'go back' to control playback via control_music.\n- These work globally — Spotify doesn't need to be on screen.\n- Say 'come back' or 'come to foreground' to restore the full SODA window.\n- Examples:\n  User: 'play some chill music' → play_music(query='chill lofi')\n  User: 'pause the music' → control_music(action='play_pause')\n  User: 'next song' → control_music(action='next')\n  User: 'turn it up' → control_system(action='volume_up')\n  User: 'set volume to 50' → control_system(action='volume_set', value=50)"
+    base += "\n\nGESTURE & WELCOME HOME:\n- When you receive a transcription containing '[Gesture: double_clap]', the user just double-clapped. Call welcome_home immediately.\n- When the user says 'welcome home', 'I'm back', 'jarvis', 'I returned', or similar — call welcome_home to run the full welcome sequence (open Spotify, Chrome windows, Cursor, and play a greeting via TTS).\n- welcome_home runs in the background and returns immediately — do not wait for it to complete."
+    return base
+
+class AudioLoop:
+    def __init__(self, video_mode=DEFAULT_MODE, sio=None,
+                 on_audio_data=None, on_transcription=None,
+                 on_tool_confirmation=None, on_project_update=None,
+                 on_error=None, on_mic_level=None, start_message=None,
+                 input_device_index=None, input_device_name=None,
+                 output_device_index=None, mobile_bridge=None):
+        self.video_mode = video_mode
+        self.sio = sio
+        self.on_audio_data = on_audio_data
+        self.on_mic_level = on_mic_level
+        self.on_transcription = on_transcription
+        self.on_tool_confirmation = on_tool_confirmation
+        self.on_project_update = on_project_update
+        self.on_error = on_error
+        self.start_message = start_message
+        self.input_device_index = input_device_index
+        self.input_device_name = input_device_name
+        self.output_device_index = output_device_index
+        self.mobile_bridge = mobile_bridge
+
+        self.web_builder = None
+        self._owner_sid = None
+        self.paused = False
+        self._turn_had_tools = False
+        self._processed_fc_ids = set()
+        self._pending_confirmations = {}
+        self._pending_face_frames = {}
+        self._pending_notepad_reads = {}
+        self._pending_webview_results = {}
+        self._last_input_transcription = ""
+        self._last_output_transcription = ""
+        self._model_is_speaking = False
+        self._tools_running = False
+        self._current_emotion = None
+        self._last_emotion_inject = 0.0
+        self.chat_buffer = {"sender": None, "text": ""}
+        self._latest_image_payload = None
+        self._last_search_query = ""
+        self._last_search_results = []
+        self._last_scraped_data = None
+        self._last_scraped_url = ""
+        self.session = None
+        self.stop_event = asyncio.Event()
+        self.audio_in_queue = None
+        self.audio_queue = None
+        self.video_queue = None
+        self.audio_stream = None
+        self.permissions = {}
+        self.project_manager = None
+        self.workbase = None
+        self.personality = PersonalityEngine()
+        self._last_activity = time.time()
+        self._last_personality_time = 0.0
+        self._idle_threshold = 45
+        self._idle_enabled = True
+        self._idle_mode = False
+        self._background_mode = False
+        self._idle_timeout = 600
+        self._last_camera_fail = 0.0
+        self._last_workflow_fire = 0
+        self.wf_memory = workflow_memory.WorkflowMemory()
+        self._turn_count = 0
+        self._context_refresh_interval = 12
+        self._last_refresh_turn = 0
+        self._exchange_history = []
+        self._context_history_path = str(Path.home() / ".soda" / "context_history.json")
+        self._load_context_history()
+        self.gesture_detector = GestureDetector() if os.getenv("GESTURE_ENABLED", "true").lower() == "true" else None
+        log.info(f"Skipping learned keyword injection — threshold-based matching is sufficient")
+
+    def _load_context_history(self):
+        try:
+            p = self._context_history_path
+            if os.path.exists(p):
+                with open(p) as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self._exchange_history = data[-30:]
+                    log.info(f"Loaded {len(self._exchange_history)} context history entries")
+        except Exception as e:
+            log.warning(f"Failed to load context history: {e}")
+
+    def _save_context_history(self):
+        try:
+            p = self._context_history_path
+            d = os.path.dirname(p)
+            if not os.path.exists(d):
+                os.makedirs(d, exist_ok=True)
+            with open(p, "w") as f:
+                json.dump(self._exchange_history, f, indent=2)
+        except Exception as e:
+            log.warning(f"Failed to save context history: {e}")
+
+    def _clear_queues(self):
+        try:
+            while self.video_queue and not self.video_queue.empty():
+                self.video_queue.get_nowait()
+        except Exception:
+            pass
+        try:
+            while self.audio_queue and not self.audio_queue.empty():
+                self.audio_queue.get_nowait()
+        except Exception:
+            pass
+
+    def _mark_activity(self):
+        self._last_activity = time.time()
+        self.personality.mood.record_user_input()
+
+    async def _idle_check_loop(self):
+        CHECK_INTERVAL = 10
+        QUIP_COOLDOWN = 60
+        while not self.stop_event.is_set():
+            await asyncio.sleep(CHECK_INTERVAL)
+            if not self._idle_enabled or self.paused or self._model_is_speaking or self._idle_mode:
+                continue
+            idle_time = time.time() - self._last_activity
+            if idle_time < self._idle_threshold:
+                continue
+            time_since_last_quip = time.time() - self._last_personality_time
+            if time_since_last_quip < QUIP_COOLDOWN:
+                continue
+            self.personality.mood.record_idle()
+            await self._emit_personality("idle")
+            if idle_time >= self._idle_timeout:
+                await self._enter_idle_mode()
+
+    async def _emit_personality(self, category, tool_name=None, context=None):
+        if not self.sio:
+            return
+        text, mood = self.personality.get_quip(category, tool_name=tool_name, context=context)
+        if not text:
+            return
+        await self.personality.save_quip(category, text)
+        self._last_personality_time = time.time()
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.sio.emit("personality", {
+            "text": text,
+            "mood": mood,
+            "category": category,
+        }))
+
+    async def _enter_idle_mode(self):
+        try:
+            while self.audio_queue and not self.audio_queue.empty():
+                self.audio_queue.get_nowait()
+        except Exception:
+            pass
+        self._idle_mode = True
+        self._background_mode = True
+        if self.sio:
+            await self.sio.emit("idle_mode", {"active": True})
+            await self.sio.emit("background_mode", {"active": True})
+        log.info("Entered idle mode — listening for 'SODA' wake word")
+
+    async def _exit_idle_mode(self):
+        self._idle_mode = False
+        self._background_mode = False
+        self._mark_activity()
+        if self.sio:
+            await self.sio.emit("idle_mode", {"active": False})
+            await self.sio.emit("background_mode", {"active": False})
+            await self.sio.emit("speaking_state", {"state": "wake"})
+        log.info("Exited idle mode — wake word detected")
+
+    def update_permissions(self, new_perms):
+        self.permissions.update(new_perms or {})
+
+    def set_paused(self, paused):
+        self.paused = paused
+
+    def stop(self):
+        self.stop_event.set()
+
+    async def send_frame(self, frame_data):
+        if isinstance(frame_data, bytes):
+            b64_data = base64.b64encode(frame_data).decode("utf-8")
+        else:
+            b64_data = frame_data
+        self._latest_image_payload = {"mime_type": "image/jpeg", "data": b64_data}
+        if self.video_queue:
+            await self.video_queue.put(self._latest_image_payload)
+
+    async def inject_text(self, text):
+        """Inject text command from mobile remote as if user spoke it."""
+        if not self.session:
+            log.warning("inject_text: no active session")
+            return
+        if not text or not text.strip():
+            return
+        log.info(f"inject_text: '{text[:80]}...'")
+        self._mark_activity()
+        if self.on_transcription:
+            self.on_transcription({"sender": "User", "text": text})
+        if self.video_queue and self._latest_image_payload:
+            await self.video_queue.put(self._latest_image_payload)
+        content = types.Content(role="user", parts=[types.Part(text=text)])
+        await self.session.send_client_content(turns=content, turn_complete=True)
+
+    async def inject_audio(self, base64_pcm):
+        """Inject PCM audio from mobile mic into Gemini session."""
+        if not self.session:
+            log.warning("inject_audio: no active session")
+            return
+        if not base64_pcm:
+            return
+        try:
+            audio_bytes = base64.b64decode(base64_pcm)
+        except Exception as e:
+            log.error(f"inject_audio: base64 decode failed: {e}")
+            return
+        log.info(f"inject_audio: {len(audio_bytes)} bytes")
+        self._mark_activity()
+        blob = types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=24000")
+        if self.video_queue and self._latest_image_payload:
+            await self.video_queue.put(self._latest_image_payload)
+        await self.session.send_realtime_input(audio=blob)
+
+    def resolve_tool_confirmation(self, request_id, confirmed):
+        if request_id in self._pending_confirmations:
+            future = self._pending_confirmations[request_id]
+            if not future.done():
+                future.set_result(confirmed)
+
+    def clear_audio_queue(self):
+        if self._model_is_speaking:
+            return
+        try:
+            count = 0
+            while self.audio_in_queue and not self.audio_in_queue.empty():
+                self.audio_in_queue.get_nowait()
+                count += 1
+            if count > 0:
+                log.debug(f"Cleared {count} chunks from audio queue")
+        except Exception:
+            pass
+
+    async def flush_chat(self):
+        sender = self.chat_buffer.get("sender")
+        text = self.chat_buffer.get("text", "").strip()
+        if sender and text:
+            if self.project_manager is None:
+                try:
+                    import project_manager as pm_mod
+                    self.project_manager = pm_mod.ProjectManager(os.getcwd())
+                except Exception:
+                    pass
+            if self.project_manager:
+                try:
+                    await asyncio.to_thread(
+                        self.project_manager.log_chat, sender, text,
+                    )
+                except Exception:
+                    pass
+        self.chat_buffer = {"sender": None, "text": ""}
+
+    async def _inject_context_refresh(self):
+        if not self._exchange_history or not self.session:
+            return
+        recent = self._exchange_history[-10:]
+        lines = []
+        for e in recent:
+            if "user" in e:
+                lines.append(f"User: {e['user']}")
+            if "model" in e:
+                lines.append(f"SODA: {e['model']}")
+        if not lines:
+            return
+        summary = (
+            "[Internal context refresh — do NOT read this aloud. "
+            "Silently update your understanding of the conversation so far.]\n"
+            + "\n".join(lines)
+        )
+        try:
+            await self.session.send_client_content(
+                turns=types.Content(role='user', parts=[types.Part(text=summary)]),
+                turn_complete=False,
+            )
+            self._last_refresh_turn = self._turn_count
+            log.info(f"Context refresh injected at turn {self._turn_count}")
+        except Exception as e:
+            log.warning(f"Context refresh failed: {e}")
+
+    async def send_audio(self):
+        while True:
+            try:
+                try:
+                    msg = await asyncio.wait_for(self.audio_queue.get(), timeout=0.1)
+                    await asyncio.wait_for(
+                        self.session.send_realtime_input(audio=types.Blob(data=msg["data"], mime_type=msg["mime_type"])),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    pass
+            except Exception as e:
+                log.error(f"send_audio error: {e}")
+                await asyncio.sleep(0.1)
+
+    async def send_video(self):
+        while True:
+            msg = await self.video_queue.get()
+            raw = base64.b64decode(msg["data"]) if isinstance(msg["data"], str) else msg["data"]
+            await self.session.send_realtime_input(video=types.Blob(data=raw, mime_type=msg["mime_type"]))
+
+    async def listen_audio(self):
+        mic_info = pya.get_default_input_device_info()
+        resolved_idx = None
+        if self.input_device_name:
+            count = pya.get_device_count()
+            target = self.input_device_name.lower()
+            for i in range(count):
+                try:
+                    info = pya.get_device_info_by_index(i)
+                    if info["maxInputChannels"] > 0:
+                        name = info.get("name", "")
+                        if target in name.lower() or name.lower() in target:
+                            resolved_idx = i
+                            break
+                except Exception:
+                    continue
+        if resolved_idx is None and self.input_device_index is not None:
+            try:
+                resolved_idx = int(self.input_device_index)
+            except ValueError:
+                resolved_idx = None
+        if resolved_idx is None:
+            resolved_idx = mic_info["index"]
+
+        try:
+            self.audio_stream = await asyncio.to_thread(
+                pya.open, format=FORMAT, channels=CHANNELS, rate=SEND_SAMPLE_RATE,
+                input=True, input_device_index=resolved_idx,
+                frames_per_buffer=CHUNK_SIZE,
+            )
+        except OSError as e:
+            log.error(f"Audio input failed: {e}")
+            return
+
+        kwargs = {"exception_on_overflow": False} if __debug__ else {}
+        SILENCE_DURATION = 0.3
+        is_speaking = False
+        silence_start = None
+
+        while True:
+            if self.paused:
+                await asyncio.sleep(0.1)
+                continue
+            try:
+                data = await asyncio.to_thread(
+                    self.audio_stream.read, CHUNK_SIZE, **kwargs
+                )
+
+                count = len(data) // 2
+                if count > 0:
+                    shorts = struct.unpack(f"<{count}h", data)
+                    rms = int(math.sqrt(sum(s**2 for s in shorts) / count))
+                else:
+                    rms = 0
+
+                if self.on_mic_level:
+                    level = min(1.0, rms / 5000.0)
+                    self.on_mic_level(level)
+
+                # Gesture detection — runs even when idle/model speaking
+                if self.gesture_detector:
+                    try:
+                        gesture = self.gesture_detector.feed(data, SEND_SAMPLE_RATE)
+                        if gesture == "double_clap":
+                            self._mark_activity()
+                            if self._background_mode or self._idle_mode:
+                                self._idle_mode = False
+                                self._background_mode = False
+                                if self.sio:
+                                    loop = asyncio.get_event_loop()
+                                    loop.create_task(self.sio.emit("idle_mode", {"active": False}))
+                                    loop.create_task(self.sio.emit("background_mode", {"active": False}))
+                                    loop.create_task(self.sio.emit("speaking_state", {"state": "wake"}))
+                                    loop.create_task(self.sio.emit("window_restore"))
+                                asyncio.create_task(asyncio.to_thread(run_welcome_sequence))
+                    except Exception as g_e:
+                        log.warning(f"Gesture detection error: {g_e}")
+
+                # Echo-safe blocking: mute microphone when SODA is speaking
+                # This prevents SODA from hearing its own voice and reacting to it
+                if self._model_is_speaking or self._idle_mode:
+                    continue
+
+                if rms > VAD_THRESHOLD:
+                    self._mark_activity()
+                    silence_start = None
+                    if not is_speaking:
+                        is_speaking = True
+                else:
+                    if is_speaking:
+                        if silence_start is None:
+                            silence_start = time.time()
+                        elif time.time() - silence_start > SILENCE_DURATION:
+                            is_speaking = False
+                            silence_start = None
+
+                # Always send audio to queue - server-side VAD will detect speech
+                if self.audio_queue:
+                    try:
+                        self.audio_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
+                    except asyncio.QueueFull:
+                        pass
+            except Exception as e:
+                log.error(f"Audio read error: {e}")
+                await asyncio.sleep(0.1)
+
+    async def _capture_and_send(self):
+        camera_indices = [0, 1, 2]
+        for i in range(3):
+            try:
+                cap = await asyncio.to_thread(cv2.VideoCapture, camera_indices[i], cv2.CAP_DSHOW)
+                if cap and cap.isOpened():
+                    result = await asyncio.to_thread(self._get_frame, cap)
+                    cap.release()
+                    if result and self.video_queue:
+                        await self.video_queue.put(result)
+                        log.info("Camera: first frame sent")
+                    return
+                if cap:
+                    cap.release()
+            except Exception:
+                continue
+
+    async def get_frames(self):
+        log.debug(f"Camera: capturing single initial frame")
+        await self._capture_and_send()
+
+    def _get_frame(self, cap):
+        ret, frame = cap.read()
+        if not ret:
+            return None
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = PIL.Image.fromarray(frame_rgb)
+        img.thumbnail([1024, 1024])
+        buf = io.BytesIO()
+        img.save(buf, format="jpeg")
+        return {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}
+
+    async def play_audio(self):
+        silent_ticks = 0
+        while True:
+            try:
+                data = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.5)
+                silent_ticks = 0
+                if self.on_mic_level:
+                    count = len(data) // 2
+                    if count > 0:
+                        shorts = struct.unpack(f"<{count}h", data)
+                        rms = int(math.sqrt(sum(s**2 for s in shorts) / count))
+                        level = min(1.0, rms / 5000.0)
+                        self.on_mic_level(level)
+                    else:
+                        self.on_mic_level(0.0)
+                if self.on_audio_data:
+                    self.on_audio_data(data)
+            except Exception:
+                silent_ticks += 1
+                if self._model_is_speaking and not self._tools_running and silent_ticks >= 3:
+                    self._model_is_speaking = False
+                    if self.sio:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(self.sio.emit("speaking_state", {"state": "idle"}))
+
+    async def run(self):
+        retry_delay = 1
+        is_reconnect = False
+        start_message = self.start_message
+        system_prompt = _build_system_prompt()
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            output_audio_transcription={},
+            input_audio_transcription={},
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name="Charon"
+                    )
+                )
+            ),
+            system_instruction=system_prompt,
+            tools=tools_list,
+        )
+
+        while not self.stop_event.is_set():
+            try:
+                log.info(f"Connecting to Gemini Live API...")
+                async with (
+                    _get_client().aio.live.connect(model=MODEL, config=config) as session,
+                    asyncio.TaskGroup() as tg,
+                ):
+                    self.session = session
+                    self.audio_in_queue = asyncio.Queue()
+                    self.audio_queue = asyncio.Queue(maxsize=500)
+                    self.video_queue = asyncio.Queue(maxsize=5)
+                    self._model_is_speaking = False
+
+                    tg.create_task(self.send_audio())
+                    tg.create_task(self.send_video())
+                    tg.create_task(self.listen_audio())
+
+                    if self.video_mode == "camera":
+                        tg.create_task(self.get_frames())
+                    elif self.video_mode == "screen":
+                        tg.create_task(self.get_screen())
+
+                    tg.create_task(self.receive_audio())
+                    tg.create_task(self.play_audio())
+                    tg.create_task(self._idle_check_loop())
+
+                    if not is_reconnect:
+                        if self.on_project_update:
+                            self.on_project_update("default")
+                        if start_message:
+                            log.info(f"Sending start message...")
+                            await self.session.send_client_content(
+                                turns=types.Content(
+                                    role='user',
+                                    parts=[types.Part(text=start_message)]
+                                ),
+                                turn_complete=True,
+                            )
+                    else:
+                        log.info(f"Reconnected")
+                        context_lines = []
+                        for e in self._exchange_history[-10:]:
+                            if "user" in e:
+                                context_lines.append(f"User: {e['user']}")
+                            if "model" in e:
+                                context_lines.append(f"SODA: {e['model']}")
+                        if context_lines:
+                            context = (
+                                "[Conversation history before reconnect — use this to continue "
+                                "from where we left off. Do NOT read this aloud.]\n"
+                                + "\n".join(context_lines)
+                            )
+                            await self.session.send_client_content(
+                                turns=types.Content(
+                                    role='user',
+                                    parts=[types.Part(text=context)]
+                                ),
+                                turn_complete=False,
+                            )
+                            log.info(f"Injected {len(context_lines)} context lines on reconnect")
+
+                    retry_delay = 1
+                    await self.stop_event.wait()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"Connection error: {e}")
+                if self.stop_event.is_set():
+                    break
+                log.warning(f"Reconnecting in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 10)
+                is_reconnect = True
+            finally:
+                if self.audio_stream:
+                    try:
+                        self.audio_stream.close()
+                    except Exception:
+                        pass
+
+    async def get_screen(self):
+        monitor = {}
+        while True:
+            if self.paused:
+                await asyncio.sleep(0.1)
+                continue
+            try:
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1]
+                    img = sct.grab(monitor)
+                    buf = io.BytesIO()
+                    PIL.Image.frombytes("RGB", img.size, img.rgb).save(buf, format="jpeg")
+                    payload = {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}
+                    if self.video_queue:
+                        await self.video_queue.put(payload)
+            except Exception as e:
+                log.error(f"Screen capture error: {e}")
+            await asyncio.sleep(2.0)
+
+    async def receive_audio(self):
+        self._turn_had_tools = False
+        self._model_is_speaking = False
+        try:
+            while True:
+                turn = self.session.receive()
+                async for response in turn:
+                    if self._idle_mode:
+                        if response.server_content and response.server_content.input_transcription:
+                            await self._exit_idle_mode()
+                        else:
+                            continue
+
+                    if data := response.data:
+                        if not self._model_is_speaking:
+                            self._model_is_speaking = True
+                            self._clear_queues()
+                            if self.sio:
+                                loop = asyncio.get_event_loop()
+                                loop.create_task(self.sio.emit("speaking_state", {"state": "model"}))
+                        self.audio_in_queue.put_nowait(data)
+
+                    if response.server_content:
+                        if response.server_content.input_transcription:
+                            self._mark_activity()
+                            if self.sio and self._model_is_speaking is False:
+                                loop = asyncio.get_event_loop()
+                                loop.create_task(self.sio.emit("speaking_state", {"state": "user"}))
+                            transcript = response.server_content.input_transcription.text
+                            if transcript and transcript != self._last_input_transcription:
+                                delta = transcript
+                                if transcript.startswith(self._last_input_transcription):
+                                    delta = transcript[len(self._last_input_transcription):]
+                                self._last_input_transcription = transcript
+                                if delta:
+                                    if re.search(r'\bshut\s?down\b', transcript, re.IGNORECASE):
+                                        log.info(f"System shutdown command detected: {transcript}")
+                                        if self.sio:
+                                            await self.sio.emit("shutdown", {})
+                                        import system_control
+                                        system_control.shutdown_computer()
+                                        return
+                                    if re.search(r'\b(turn off|power off|stop soda|switch off)\b', transcript, re.IGNORECASE):
+                                        log.info(f"SODA shutdown command detected: {transcript}")
+                                        if self.sio:
+                                            await self.sio.emit("shutdown", {})
+                                        self.stop()
+                                        return
+                                    if CLOSE_PATTERN.search(transcript) or CLOSE_STANDALONE.search(transcript):
+                                        now = time.time()
+                                        if getattr(self, '_last_close_proactive', 0) < now - 3:
+                                            self._last_close_proactive = now
+                                            if self.sio:
+                                                await self.sio.emit("close_panel", {"panel": "all"})
+                                    if len(transcript) > 8:
+                                        wf_name = workflow_intent.intent_matcher.match_with_context(transcript)
+                                        if wf_name:
+                                            self._last_workflow_fire = time.time()
+                                            asyncio.create_task(self._emit_workflow(wf_name, transcript))
+                                    self.clear_audio_queue()
+                                    if self.on_transcription:
+                                        self.on_transcription({"sender": "User", "text": delta})
+                                    if self.chat_buffer["sender"] != "User":
+                                        if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
+                                            pass
+                                        self.chat_buffer = {"sender": "User", "text": delta}
+                                    else:
+                                        self.chat_buffer["text"] += delta
+
+                        if response.server_content.output_transcription:
+                            transcript = response.server_content.output_transcription.text
+                            if transcript and transcript != self._last_output_transcription:
+                                delta = transcript
+                                if transcript.startswith(self._last_output_transcription):
+                                    delta = transcript[len(self._last_output_transcription):]
+                                self._last_output_transcription = transcript
+                                if delta and self.on_transcription:
+                                    self.on_transcription({"sender": "SODA", "text": delta})
+                                    if self.chat_buffer["sender"] != "SODA":
+                                        if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
+                                            pass
+                                        self.chat_buffer = {"sender": "SODA", "text": delta}
+                                    else:
+                                        self.chat_buffer["text"] += delta
+
+                    if response.tool_call:
+                        self._mark_activity()
+                        function_responses = []
+                        tasks = []
+                        for fc in response.tool_call.function_calls:
+                            if fc.id in self._processed_fc_ids:
+                                continue
+                            self._processed_fc_ids.add(fc.id)
+                            self._turn_had_tools = True
+
+                            if self.sio:
+                                loop = asyncio.get_event_loop()
+                                loop.create_task(self.sio.emit("tool_confirmation_request", {
+                                    "id": fc.id, "tool": fc.name, "args": fc.args,
+                                }))
+
+                            tasks.append(self._dispatch_tool(fc))
+
+                        # Mute mic during tool dispatch — prevents user audio from leaking to
+                        # Gemini while the model is processing tool results
+                        if tasks:
+                            self._model_is_speaking = True
+                            self._tools_running = True
+                            self._clear_queues()
+
+                        if tasks:
+                            raw = await asyncio.gather(*tasks, return_exceptions=True)
+                            for result in raw:
+                                if isinstance(result, Exception):
+                                    log.warning(f"Tool call failed: {result}")
+                                    continue
+                                if result is not None:
+                                    function_responses.append(result)
+                                    result_text = str(result.response.get("result", ""))
+                                    if any(w in result_text.lower() for w in ["error", "fail", "could not", "not found", "invalid"]):
+                                        self.personality.mood.record_failure()
+                                        await self._emit_personality("tool_failure", tool_name=result.name)
+                                    else:
+                                        self.personality.mood.record_success()
+                                    if self.sio:
+                                        result_data = result.response.get("result", "")
+                                        loop = asyncio.get_event_loop()
+                                        loop.create_task(self.sio.emit("tool_result", {
+                                            "tool": result.name, "result": result_data,
+                                        }))
+
+                        if function_responses:
+                            # Save user's last input so reconnect has context if send fails
+                            user_text = self._last_input_transcription.strip()
+                            if user_text and (not self._exchange_history or self._exchange_history[-1].get("user") != user_text):
+                                self._exchange_history.append({"user": user_text[-300:]})
+                                self._save_context_history()
+                            try:
+                                await self.session.send_tool_response(
+                                    function_responses=function_responses
+                                )
+                            except Exception as e:
+                                log.error(f"Error sending tool response: {e}")
+                                break
+                            # Reset speaking flag immediately — don't wait for play_audio silence timeout
+                            self._model_is_speaking = False
+                            self._tools_running = False
+
+                await self.flush_chat()
+                self._turn_count += 1
+                user_text = self._last_input_transcription.strip()
+                model_text = self._last_output_transcription.strip()
+                if user_text or model_text:
+                    entry = {}
+                    if user_text:
+                        entry["user"] = user_text[-300:]
+                    if model_text:
+                        entry["model"] = model_text[-300:]
+                    if not self._exchange_history or self._exchange_history[-1] != entry:
+                        self._exchange_history.append(entry)
+                        if len(self._exchange_history) > 30:
+                            self._exchange_history = self._exchange_history[-30:]
+                        self._save_context_history()
+                if self._turn_count - self._last_refresh_turn >= self._context_refresh_interval:
+                    if self._exchange_history and self.session:
+                        await self._inject_context_refresh()
+                    self._last_refresh_turn = self._turn_count
+
+        except (websockets.exceptions.ConnectionClosedError,
+                websockets.exceptions.ConnectionClosed) as e:
+            code = getattr(e, 'code', '?')
+            log.warning(f"Session disconnected (code {code}): {e}")
+            if self.on_error:
+                self.on_error(f"Session disconnected: {e}")
+            raise e
+        except Exception as e:
+            log.error(f"Error in receive_audio: {e}")
+            traceback.print_exc()
+            if self.on_error:
+                self.on_error(f"receive_audio crashed: {e}")
+            raise e
+
+    async def _background_play_music(self, query):
+        """Run play_music in background so the receive_audio loop doesn't block for 15+ seconds."""
+        try:
+            r = await asyncio.to_thread(spotify_bridge.play_music, query)
+            if r.get("success"):
+                await asyncio.to_thread(system_control.volume_set, 80)
+                self._background_mode = True
+                self._mark_activity()
+                if self.sio:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sio.emit("window_restore"))
+            log.info(f"[Background] play_music result: {r}")
+        except Exception as e:
+            log.error(f"[Background] play_music failed: {e}")
+
+    async def _emit_workflow(self, wf_name, delta):
+        try:
+            log.info(f"[wf-debug] _emit_workflow starting: {wf_name}")
+            wf_data = await workflow_data.collect()
+            log.info(f"[wf-debug] workflow_data collected, keys={list(wf_data.keys())}")
+            wf_data["workflow"] = wf_name
+            if self.sio:
+                log.info(f"[wf-debug] emitting workflow_start to sio")
+                await self.sio.emit("workflow_start", wf_data)
+                log.info(f"[wf-debug] emit done")
+            log.info(f"Workflow: {wf_name}")
+            self.wf_memory.record_trigger(delta, wf_name)
+            self.wf_memory.save()
+        except Exception as e:
+            log.error(f"Workflow emit failed: {e}")
+            traceback.print_exc()
+
+    async def _dispatch_tool(self, fc):
+        name = fc.name
+        args = fc.args
+
+        if name == "get_weather":
+            r = await get_weather(args.get("location", ""), args.get("units", "celsius"))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_ip_info":
+            r = await get_ip_info(args.get("ip", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_exchange_rate":
+            r = await get_exchange_rate(args.get("from_curr", ""), args.get("to_curr", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_news":
+            now = time.time()
+            if getattr(self, '_last_news_briefing', 0) > now - 5:
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": {"articles": [], "message": "Already shown recently."}})
+            self._last_news_briefing = now
+            try:
+                query = args.get("query", "")
+                r = await get_news_briefing(query=query, max_per_category=3)
+                self._news_articles = r.get("articles", [])
+                log.info(f"get_news: query='{query}' returned {len(self._news_articles)} articles")
+                payload = {
+                    "workflow": "news-briefing",
+                    "articles": self._news_articles,
+                    "categories": r.get("categories", []),
+                    "query": query,
+                }
+                if self.sio:
+                    await self.sio.emit("workflow_start", payload)
+                await asyncio.sleep(0.8)
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": {
+                    "type": "news_briefing",
+                    "articles": self._news_articles,
+                    "categories": r.get("categories", []),
+                    "query": query,
+                }})
+            except Exception as e:
+                log.error(f"get_news failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": {"articles": [], "error": str(e)}})
+
+        elif name == "news_control":
+            action = args.get("action", "next")
+            index = args.get("index")
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("news_briefing_control", {
+                    "action": action,
+                    "index": index,
+                }))
+                if action == "close":
+                    await self.sio.emit("close_panel", {"panel": "all"})
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": {"ok": True}})
+
+        elif name == "define_word":
+            r = await define_word(args.get("word", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_wikipedia_summary":
+            r = await get_wikipedia_summary(args.get("topic", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "web_search_live":
+            query = args.get("query", "")
+            r = await web_search_live(query, args.get("num_results", 5))
+            self._last_search_query = query
+            self._last_search_results = r.get("results", [])
+            if self.sio and self._last_search_results:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("search_results", {
+                    "query": query,
+                    "results": self._last_search_results,
+                }))
+                await asyncio.sleep(1.0)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "browse_webpage":
+            url = args.get("url", "")
+            r = await fetch_webpage(url)
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("webpage_content", {
+                    "url": url,
+                    "content": r.get("content", "") if isinstance(r, dict) else str(r),
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "show_search_results":
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("search_results", {
+                    "query": getattr(self, '_last_search_query', ''),
+                    "results": getattr(self, '_last_search_results', []),
+                    "forced": True,
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": {"displayed": True}})
+
+        elif name == "list_files":
+            path = args.get("path", "")
+            search = args.get("search", "")
+            r = await list_files(path, search)
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("file_list", {
+                    "path": r.get("path", path),
+                    "items": r.get("items", []),
+                    "success": r.get("success", False),
+                    "searchQuery": search,
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "open_file":
+            r = await open_file(args.get("path", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "close_panel":
+            panel = (args.get("panel", "") or "").strip()
+            if not panel:
+                panel = "all"
+            if self.sio:
+                await self.sio.emit("close_panel", {"panel": panel})
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Closed."})
+
+        elif name == "show_tools":
+            decls = tools_list[0]["function_declarations"] if isinstance(tools_list, list) and len(tools_list) > 0 and isinstance(tools_list[0], dict) and "function_declarations" in tools_list[0] else tools_list
+            tool_names = [t.get("name", "?") for t in decls]
+            r = json.dumps(tool_names, indent=2)
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("tool_showcase", {"tools": tool_names}))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_system_status":
+            r = await get_system_status()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "close_window":
+            r = await close_window(args.get("window_name", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "create_folder":
+            path = args.get("path", "")
+            r = await create_folder(path)
+            if self.sio and r.get("success"):
+                list_r = await list_files(path)
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("file_list", {
+                    "path": path,
+                    "items": list_r.get("items", []),
+                    "success": True,
+                    "searchQuery": "",
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "delete_items":
+            paths = args.get("paths", [])
+            r = await delete_items(paths)
+            if self.sio and r.get("success"):
+                for p in (paths if isinstance(paths, list) else [paths]):
+                    parent = os.path.dirname(p)
+                    if parent:
+                        list_r = await list_files(parent)
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(self.sio.emit("file_list", {
+                            "path": parent,
+                            "items": list_r.get("items", []),
+                            "success": True,
+                            "searchQuery": "",
+                        }))
+                        break
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "rename_item":
+            old_path = args.get("old_path", "")
+            new_path = args.get("new_path", "")
+            r = await rename_item(old_path, new_path)
+            if self.sio and r.get("success"):
+                parent = os.path.dirname(new_path)
+                if parent:
+                    list_r = await list_files(parent)
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sio.emit("file_list", {
+                        "path": parent,
+                        "items": list_r.get("items", []),
+                        "success": True,
+                        "searchQuery": "",
+                    }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "copy_item":
+            source = args.get("source", "")
+            dest = args.get("destination", "")
+            r = await copy_item(source, dest)
+            if self.sio and r.get("success"):
+                dest_dir = dest if os.path.isdir(dest) else os.path.dirname(dest)
+                list_r = await list_files(dest_dir)
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("file_list", {
+                    "path": dest_dir,
+                    "items": list_r.get("items", []),
+                    "success": True,
+                    "searchQuery": "",
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "move_item":
+            source = args.get("source", "")
+            dest = args.get("destination", "")
+            r = await move_item(source, dest)
+            if self.sio and r.get("success"):
+                dest_dir = dest if os.path.isdir(dest) else os.path.dirname(dest)
+                list_r = await list_files(dest_dir)
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("file_list", {
+                    "path": dest_dir,
+                    "items": list_r.get("items", []),
+                    "success": True,
+                    "searchQuery": "",
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "list_drives":
+            r = await list_drives()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("file_list", {
+                    "path": r.get("path", "Available Drives"),
+                    "items": r.get("items", []),
+                    "success": r.get("success", False),
+                    "searchQuery": "",
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "clipboard_read":
+            r = system_local.clipboard_read()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "clipboard_write":
+            r = system_local.clipboard_write(args.get("text", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "screenshot":
+            r = system_local.take_screenshot()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "list_processes":
+            r = system_local.list_processes(args.get("limit", 10))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_active_window":
+            r = system_local.get_active_window()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "run_code":
+            r = code_runner.run_code(
+                args.get("code", ""),
+                args.get("language", "auto"),
+                args.get("timeout", 10),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "remember_fact":
+            r = user_memory.add_fact(args.get("key", ""), args.get("value", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "recall_facts":
+            r = user_memory.search_facts(args.get("query", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_user_profile":
+            r = user_memory.get_profile()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "set_preference":
+            r = user_memory.set_preference(args.get("key", ""), args.get("value", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "remember_person":
+            r = memory_store.remember_person(
+                args.get("name", ""), args.get("relationship", ""),
+                args.get("traits", ""), args.get("preferences", ""),
+                args.get("notes", ""),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "recall_person":
+            r = memory_store.recall_person(args.get("query", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "remember_lesson":
+            r = memory_store.remember_lesson(args.get("situation", ""), args.get("correction", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "forget_fact":
+            r = user_memory.delete_fact(args.get("key", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "list_memory":
+            r = memory_store.list_memory(args.get("type", "all"))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "show_memory":
+            now = time.time()
+            if getattr(self, '_last_show_memory', 0) > now - 30:
+                log.info("show_memory suppressed by cooldown")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": {"shown": True}})
+            self._last_show_memory = now
+            try:
+                profile = user_memory.get_profile()
+                facts_data = user_memory.list_facts(limit=50)
+                facts = facts_data.get("facts", [])
+                people = memory_store.list_people(limit=20)
+                lessons = memory_store.recall_lessons("", limit=10)
+                payload = {
+                    "workflow": "memory-view",
+                    "profile": profile,
+                    "facts": facts,
+                    "people": people,
+                    "lessons": lessons,
+                }
+                if self.sio:
+                    await self.sio.emit("workflow_start", payload)
+                await asyncio.sleep(0.8)
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": {"shown": True}})
+            except Exception as e:
+                log.error(f"show_memory failed: {e}")
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": {"shown": True, "error": str(e)}}
+                )
+
+        elif name == "analyze_screen":
+            r = await screen_vision.analyze_screen(args.get("prompt", "Describe what is on the screen in detail."))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "read_screen_text":
+            r = await screen_vision.read_screen_text()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "set_reminder":
+            r = reminders.set_reminder(
+                args.get("message", ""),
+                args.get("fire_at"), args.get("in_seconds"),
+                args.get("recurring_seconds"),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "list_reminders":
+            r = reminders.list_reminders()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "cancel_reminder":
+            r = reminders.cancel_reminder(args.get("id", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "set_schedule":
+            r = schedules.set_schedule(
+                args.get("title", ""), args.get("date", ""),
+                args.get("time", ""), args.get("details", ""),
+            )
+            if self.sio:
+                all_s = schedules.list_schedules()
+                loop = asyncio.get_event_loop()
+                loop.create_task(
+                    self.sio.emit("open_schedule", {
+                        "schedule": r.get("schedule"),
+                        "all_schedules": all_s.get("schedules", []),
+                    })
+                )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "list_schedules":
+            r = schedules.list_schedules()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "delete_schedule":
+            r = schedules.delete_schedule(args.get("id", ""))
+            if self.sio and r.get("success"):
+                all_s = schedules.list_schedules()
+                loop = asyncio.get_event_loop()
+                loop.create_task(
+                    self.sio.emit("open_schedule", {
+                        "schedule": None,
+                        "all_schedules": all_s.get("schedules", []),
+                    })
+                )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "show_calendar":
+            all_s = schedules.list_schedules()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(
+                    self.sio.emit("open_schedule", {
+                        "schedule": None,
+                        "all_schedules": all_s.get("schedules", []),
+                    })
+                )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Calendar opened."})
+
+        elif name == "recognize_face":
+            r = face_store.recognize_face(args.get("embedding", []))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "remember_face":
+            r = face_store.store_face(args.get("name", ""), args.get("embedding", []))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "plan_tasks":
+            r = task_planner.plan_tasks(args.get("title", ""), args.get("tasks", []))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "update_task":
+            r = task_planner.update_task(args.get("task_id", ""), args.get("status", ""), args.get("result"))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "cancel_plan":
+            r = task_planner.cancel_plan()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "get_plan":
+            r = task_planner.get_active_plan()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "github_list_repos":
+            r = github_tools.list_repos(args.get("owner"))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "github_create_repo":
+            r = github_tools.create_repo(
+                args.get("name", ""), args.get("description", ""),
+                args.get("private", False), args.get("auto_init", False),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "github_get_repo":
+            r = github_tools.get_repo(args.get("repo", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "github_create_pr":
+            r = github_tools.create_pr(
+                args.get("repo", ""), args.get("title", ""),
+                args.get("body", ""), args.get("head", ""),
+                args.get("base", "main"),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "github_list_issues":
+            r = github_tools.list_issues(args.get("repo", ""), args.get("state", "open"))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "github_create_issue":
+            r = github_tools.create_issue(args.get("repo", ""), args.get("title", ""), args.get("body", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "vercel_list_projects":
+            r = vercel_tools.list_projects()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "vercel_deploy":
+            r = vercel_tools.deploy(
+                args.get("path", "."), args.get("name"), args.get("prod", False),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "vercel_list_deployments":
+            r = vercel_tools.list_deployments(args.get("project"), args.get("limit", 20))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "vercel_get_deployment":
+            r = vercel_tools.get_deployment(args.get("url_or_id", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "netlify_list_sites":
+            r = netlify_tools.list_sites()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "netlify_get_site":
+            r = netlify_tools.get_site(args.get("site_id", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "netlify_deploy":
+            r = netlify_tools.deploy(
+                args.get("path", "."), args.get("prod", False), args.get("message", ""),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "netlify_create_site":
+            r = netlify_tools.create_site(args.get("name"))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "netlify_list_deploys":
+            r = netlify_tools.list_deploys(args.get("site_id", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "notepad_open":
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("open_notepad", {
+                    "id": f"np_{fc.id}",
+                    "tabs": [
+                        {"title": t.get("name") or t.get("title", "notes"), "content": t.get("content", "")}
+                        for t in (args.get("tabs") or [])
+                    ]
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Notepad opened."})
+
+        elif name == "notepad_write":
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("notepad_write", {
+                    "tab": args.get("tab", ""), "content": args.get("content", ""),
+                    "mode": args.get("mode", "append"),
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Writing to notepad."})
+
+        elif name == "notepad_read":
+            if self.sio:
+                future = asyncio.Future()
+                _pending_notepad_reads[fc.id] = future
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("notepad_read", {"tab": args.get("tab", ""), "id": fc.id}))
+                try:
+                    result = await asyncio.wait_for(future, timeout=10.0)
+                    return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+                except asyncio.TimeoutError:
+                    _pending_notepad_reads.pop(fc.id, None)
+                    return types.FunctionResponse(id=fc.id, name=name, response={"result": "Timeout reading notepad."})
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "No connection."})
+
+        elif name == "view_file":
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("view_file_content", {"path": args.get("path", "")}))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Viewer opened."})
+
+        elif name == "go_to_sleep":
+            self._background_mode = True
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("window_minimize"))
+            async def _delayed_sleep():
+                await asyncio.sleep(3.0)
+                if not self._background_mode:
+                    return
+                await self._enter_idle_mode()
+            asyncio.create_task(_delayed_sleep())
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Going to sleep."})
+
+        elif name == "wake_up":
+            await self._exit_idle_mode()
+            if self.sio:
+                await self.sio.emit("window_restore")
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Waking up."})
+
+        elif name == "go_background":
+            self._background_mode = True
+            self._mark_activity()
+            async def _delayed_background():
+                await asyncio.sleep(3.0)
+                if not self._background_mode:
+                    return
+                if self.sio:
+                    await self.sio.emit("background_mode", {"active": True})
+                log.info("Background mode active — listening for voice commands")
+            asyncio.create_task(_delayed_background())
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Going to background."})
+
+        elif name == "come_back":
+            self._idle_mode = False
+            self._background_mode = False
+            self._mark_activity()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("idle_mode", {"active": False}))
+                loop.create_task(self.sio.emit("background_mode", {"active": False}))
+                loop.create_task(self.sio.emit("speaking_state", {"state": "wake"}))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Coming back."})
+
+        elif name == "welcome_home":
+            asyncio.create_task(asyncio.to_thread(run_welcome_sequence))
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": "Running the welcome home sequence now."}
+            )
+
+        elif name == "play_music":
+            query = args.get("query", "")
+            asyncio.create_task(self._background_play_music(query))
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": f"Playing {query} on Spotify now."}
+            )
+
+        elif name == "control_music":
+            action = args.get("action", "")
+            if action == "play_pause":
+                spotify_bridge.play_pause()
+            elif action == "next":
+                spotify_bridge.next_track()
+            elif action == "previous":
+                spotify_bridge.previous_track()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": f"Music {action}."})
+
+        elif name == "mouse_click":
+            screen_control.mouse_click(
+                args.get("x", 0), args.get("y", 0),
+                args.get("button", "left"), args.get("clicks", 1),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Clicked."})
+
+        elif name == "mouse_move":
+            screen_control.mouse_move(args.get("x", 0), args.get("y", 0), args.get("duration", 0.3))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Moved."})
+
+        elif name == "mouse_scroll":
+            screen_control.mouse_scroll(args.get("amount", 0))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Scrolled."})
+
+        elif name == "mouse_drag":
+            screen_control.mouse_drag(
+                args.get("start_x", 0), args.get("start_y", 0),
+                args.get("end_x", 0), args.get("end_y", 0),
+                args.get("duration", 0.5),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Dragged."})
+
+        elif name == "keyboard_type":
+            screen_control.keyboard_type(args.get("text", ""), args.get("interval", 0.05))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Typed."})
+
+        elif name == "keyboard_press":
+            screen_control.keyboard_press(args.get("keys", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Pressed."})
+
+        elif name == "window_focus":
+            screen_control.window_focus(args.get("title", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Focused."})
+
+        elif name == "window_list":
+            r = screen_control.window_list()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "window_move":
+            screen_control.window_move(
+                args.get("title", ""), args.get("x", 0), args.get("y", 0),
+                args.get("width"), args.get("height"),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Moved."})
+
+        elif name == "send_telegram_message":
+            from telegram_bot import telegram_bot
+            try:
+                r = telegram_bot.send_message(args.get("text", ""))
+            except Exception as e:
+                r = str(e)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "send_telegram_file":
+            from telegram_bot import telegram_bot
+            try:
+                r = telegram_bot.send_file(args.get("path", ""))
+            except Exception as e:
+                r = str(e)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "search_and_send_telegram":
+            r = await search_and_send_telegram(args.get("query", ""), args.get("num_results", 8))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "show_agents":
+            r = "SODA has the following capabilities: " + ", ".join(
+                t.get("name", "") for t in __import__("tools", fromlist=["tools_list"]).tools_list
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "shutdown_soda":
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("shutdown", {}))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Shutting down SODA."})
+
+        elif name == "shutdown_system":
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("shutdown", {}))
+            system_control.shutdown_computer()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Shutting down computer."})
+
+        elif name == "execute_command":
+            cmd = args.get("command", "")
+            r = await system_app.run_terminal_command(cmd)
+            output_text = r.get("output", "") if isinstance(r, dict) else (str(r) if r else "")
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("command_output", {
+                    "command": cmd,
+                    "output": output_text,
+                    "success": True,
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "terminal_execute":
+            cmd = args.get("command", "")
+            timeout = args.get("timeout", 30)
+            r = await system_app.run_terminal_command(cmd, timeout)
+            output_text = r.get("output", "") if isinstance(r, dict) else (str(r) if r else "")
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("command_output", {
+                    "command": cmd,
+                    "output": output_text,
+                    "success": True,
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "write_file":
+            path = args.get("path", "")
+            content = args.get("content", "")
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                r = f"Written to {path}"
+                if self.sio:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sio.emit("view_file_content", {"path": path}))
+                    parent = os.path.dirname(path)
+                    if parent:
+                        list_r = await list_files(parent)
+                        loop.create_task(self.sio.emit("file_list", {
+                            "path": parent,
+                            "items": list_r.get("items", []),
+                            "success": True,
+                            "searchQuery": "",
+                        }))
+            except Exception as e:
+                r = str(e)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "read_file":
+            path = args.get("path", "")
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                r = content
+            except Exception as e:
+                r = str(e)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "create_project":
+            import project_manager
+            name = args.get("name", "")
+            pm = project_manager.ProjectManager(os.getcwd())
+            success, msg = pm.create_project(name)
+            if success:
+                pm.switch_project(name)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": msg})
+
+        elif name == "switch_project":
+            import project_manager
+            name = args.get("name", "")
+            pm = project_manager.ProjectManager(os.getcwd())
+            success, msg = pm.switch_project(name)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": msg})
+
+        elif name == "list_projects":
+            import project_manager
+            pm = project_manager.ProjectManager(os.getcwd())
+            projects = pm.list_projects()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": f"Projects: {', '.join(projects)}"})
+
+        elif name == "control_system":
+            r = await asyncio.to_thread(system_control.computer_settings_action,
+                args.get("action", ""), args.get("value", ""),
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "open_browser":
+            url = args.get("url", "")
+            external = args.get("external", False)
+            if url in URL_ALIASES:
+                url = URL_ALIASES[url]
+            if external:
+                system_app.open_url(url, args.get("browser"))
+                if self.sio:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sio.emit("window_minimize", {}))
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("open_url", {"url": url}))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": f"Opened {url}"})
+
+        elif name == "scrape_site":
+            from scraper_ai import extract
+            url = args.get("url", "")
+            prompt = args.get("prompt", "")
+            r = await extract(url, prompt)
+            self._last_scraped_data = r
+            self._last_scraped_url = url
+            if self.sio and r and r.get("success"):
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("scraped_data", {
+                    "url": url,
+                    "data": r.get("data"),
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "export_data":
+            from export_service import export_data as _export
+            data = args.get("data", "")
+            fmt = args.get("format", "markdown")
+            title = args.get("title", "soda_export")
+            if isinstance(data, str):
+                import json
+                try:
+                    data = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            r = await _export(data, fmt, title)
+            if r.get("success") and r.get("path"):
+                if self.sio:
+                    loop = asyncio.get_event_loop()
+                    mime = "text/markdown" if fmt == "markdown" else "text/csv" if fmt == "csv" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    loop.create_task(self.sio.emit("view_file_content", {
+                        "payload": {
+                            "type": "text",
+                            "content": None,
+                            "mime": mime,
+                            "path": r["path"],
+                        }
+                    }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "open_app":
+            app_name = args.get("app_name", "")
+            system_app.open_app(app_name)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Opened app."})
+
+        elif name == "webview_action":
+            loop = asyncio.get_event_loop()
+            loop.create_task(self.sio.emit("webview_action", {
+                "id": args.get("id", ""),
+                "action": args.get("action", ""),
+                "params": args.get("params", {}),
+            }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Action sent."})
+
+        elif name == "search_web":
+            system_app.search_web(args.get("query", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Searching."})
+
+        elif name == "search_youtube":
+            system_app.search_youtube(args.get("query", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Searching YouTube."})
+
+        elif name == "whatsapp_find_and_call":
+            r = await whatsapp_bridge.call_contact(args.get("contact_name", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "whatsapp_find_and_message":
+            r = await whatsapp_bridge.message_contact(
+                args.get("contact_name", ""), args.get("message", "")
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "send_whatsapp":
+            r = await whatsapp_bridge.message_contact(
+                args.get("contact_name", "") or args.get("contact", ""),
+                args.get("message", "")
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "send_discord":
+            system_app.send_discord(args.get("contact", ""), args.get("message", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Sent."})
+
+        elif name == "start_workflow":
+            wf = args.get("workflow", "")
+            valid = {"outside", "project-review", "break-time", "workbase-showcase"}
+            if wf not in valid:
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": f"Invalid workflow '{wf}'. Valid: {', '.join(sorted(valid))}"},
+                )
+            try:
+                data = await workflow_data.collect()
+                data["workflow"] = wf
+                if self.sio:
+                    await self.sio.emit("workflow_start", data)
+                await asyncio.sleep(0.8)
+                log.info(f"Started workflow: {wf}")
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": f"Started {wf} workflow. Tell the user what's happening in character."},
+                )
+            except Exception as e:
+                log.error(f"workflow start failed: {e}")
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": f"Failed to start workflow: {e}"},
+                )
+
+        elif name == "start_website_project":
+            from web_builder_orchestrator import WebBuilderOrchestrator
+            if not self.web_builder:
+                self.web_builder = WebBuilderOrchestrator(self.sio)
+            result = await self.web_builder.start_website_project()
+            return types.FunctionResponse(id=fc.id, name=name, response=result)
+
+        elif name == "web_builder_answer":
+            if not self.web_builder:
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": "No website project in progress. Call start_website_project first."},
+                )
+            answer = args.get("answer", "")
+            if not answer:
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": "No answer provided."},
+                )
+            result = await self.web_builder.process_answer(answer)
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": result["result"]})
+
+        elif name == "workbase_list":
+            if self.workbase is None:
+                self.workbase = Workbase()
+            projects = self.workbase.list_projects()
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": f"Workbase projects ({len(projects)}): " + json.dumps(projects, ensure_ascii=False)},
+            )
+
+        elif name == "workbase_get":
+            if self.workbase is None:
+                self.workbase = Workbase()
+            project_name = args.get("project_name", "")
+            status = self.workbase.get_project_status(project_name)
+            if status is None:
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": f"Project '{project_name}' not found in workbase."},
+                )
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": json.dumps(status, ensure_ascii=False)},
+            )
+
+        elif name == "workbase_save_progress":
+            if self.workbase is None:
+                self.workbase = Workbase()
+            pname = args.get("project_name", "")
+            entry = args.get("entry", "")
+            success, msg = self.workbase.save_progress(pname, entry)
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": msg},
+            )
+
+        elif name == "workbase_import":
+            if self.workbase is None:
+                self.workbase = Workbase()
+            folder_path = args.get("folder_path", "")
+            result = self.workbase.import_project(folder_path)
+            if result.get("success"):
+                if self.sio:
+                    projects = self.workbase.emit_workflow_start(self.sio)
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": f"Imported '{result['display_name']}' into workbase. Tell the user what you found."},
+                )
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": f"Import failed: {result.get('error', 'Unknown error')}"},
+            )
+
+        elif name == "workbase_save_context":
+            if self.workbase is None:
+                self.workbase = Workbase()
+            pname = args.get("project_name", "")
+            context = args.get("context", "")
+            success, msg = self.workbase.save_context(pname, context)
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": msg},
+            )
+
+        elif name == "workbase_compare":
+            if self.workbase is None:
+                self.workbase = Workbase()
+            project_name = args.get("project_name", "")
+            result = self.workbase.compare_progress(project_name)
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": json.dumps(result, ensure_ascii=False)},
+            )
+
+        elif name == "create_scheduled_task":
+            r = scheduler.create_task(
+                args.get("action_text", ""), args.get("schedule", ""), args.get("label")
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "list_scheduled_tasks":
+            r = scheduler.list_tasks()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        elif name == "delete_scheduled_task":
+            r = scheduler.delete_task(args.get("task_id", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+
+        # ── IELTS Tools ────────────────────────────────────────────────────
+        elif name == "ielts_dashboard":
+            eng = _get_ielts_engine()
+            data = eng.get_dashboard_data()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSDashboard",
+                    "direction": "right",
+                    "data": data
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(data)})
+
+        elif name == "ielts_set_goal":
+            eng = _get_ielts_engine()
+            if args.get("target_band"):
+                eng.set_target_band(float(args["target_band"]))
+            if args.get("exam_date"):
+                eng.set_exam_date(args["exam_date"])
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({
+                "status": "updated",
+                "target_band": eng.progress["target_band"],
+                "exam_date": eng.progress.get("exam_date")
+            })})
+
+        elif name == "ielts_speaking_start":
+            ss = _get_ielts_speaking_session()
+            part = int(args.get("part", 1))
+            topic = args.get("topic")
+            if part == 1:
+                result = ss.get_part1_question(topic)
+            elif part == 2:
+                result = ss.get_part2_cue_card()
+            else:
+                result = ss.get_part3_questions()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("workflow_start", {
+                    "workflow": "ielts-speaking",
+                    "data": result
+                }))
+            topic_txt = result.get("topic", "")
+            if part == 1:
+                qs = result.get("questions", [])
+                lines = "\n".join(f"{i+1}. {q}" for i, q in enumerate(qs))
+                spoken = (
+                    f"Let's begin IELTS Speaking Part 1 \u2014 the interview section. "
+                    f"Your topic is '{topic_txt}'. Here are your questions:\n"
+                    f"{lines}\n"
+                    f"Please begin speaking. You have 4 minutes."
+                )
+            elif part == 2:
+                pts = result.get("bullet_points", [])
+                lines = "\n".join(f"- {p}" for p in pts)
+                spoken = (
+                    f"Now for Part 2 \u2014 the long turn. Here is your cue card:\n"
+                    f"Topic: {topic_txt}\n"
+                    f"{lines}\n"
+                    f"You have 1 minute to prepare, then 2 minutes to speak."
+                )
+            elif part == 3:
+                qs = result.get("questions", [])
+                lines = "\n".join(f"{i+1}. {q}" for i, q in enumerate(qs))
+                spoken = (
+                    f"Now for Part 3 \u2014 the discussion section. Here are your questions:\n"
+                    f"{lines}\n"
+                    f"Please begin speaking. You have 5 minutes."
+                )
+            return types.FunctionResponse(id=fc.id, name=name, response={
+                "result": spoken
+            })
+
+        elif name == "ielts_speaking_evaluate":
+            ss = _get_ielts_speaking_session()
+            transcript = args.get("transcript", "")
+            question = args.get("question", "")
+            part = int(args.get("part", 1))
+            eval_prompt = ss.analyze_response_prompt(transcript, part, question)
+            try:
+                import google.genai as genai
+                client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                resp = await asyncio.to_thread(
+                    lambda: client.models.generate_content(
+                        model="models/gemini-2.5-flash", contents=eval_prompt
+                    )
+                )
+                eval_text = resp.text or ""
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```', eval_text)
+                if json_match:
+                    eval_text = json_match.group(1)
+                else:
+                    brace_start = eval_text.find('{')
+                    brace_end = eval_text.rfind('}')
+                    if brace_start >= 0 and brace_end > brace_start:
+                        eval_text = eval_text[brace_start:brace_end+1]
+                evaluation = json.loads(eval_text)
+            except Exception as e:
+                log.warning(f"Speaking eval REST API failed: {e}")
+                wc = len(transcript.split()) if transcript else 0
+                fc = sum(transcript.lower().count(w) for w in ['um','uh','like','you know','actually']) if transcript else 0
+                ob = 4.0 if wc < 30 else (5.0 if wc < 80 else (6.0 if wc < 150 else 6.5))
+                evaluation = {
+                    "overall_band": ob,
+                    "band_scores": {
+                        "fluency_coherence": min(9, ob + 0.5),
+                        "lexical_resource": min(9, ob),
+                        "grammatical_range": min(9, ob - 0.5),
+                        "pronunciation": min(9, ob),
+                    },
+                    "strengths": ["Attempted to respond to the prompt"],
+                    "improvements": [{"issue": "Expand your response with more specific details, examples, and complex sentence structures"}],
+                    "word_count": wc, "filler_words_count": fc,
+                }
+            try:
+                if self.sio:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sio.emit("panel_open", {
+                        "panelType": "IELTSSpeaking",
+                        "direction": "right",
+                        "data": evaluation
+                    }))
+                if "overall_band" in evaluation:
+                    ss.save_session(evaluation)
+                    band = evaluation.get("overall_band", "")
+                    improvements = evaluation.get("improvements", [])
+                    tip = improvements[0].get("issue", "") if improvements and isinstance(improvements[0], dict) else ""
+                    next_part = {1: 2, 2: 3}.get(part)
+                    if next_part:
+                        next_msg = f" Now let us move to Part {next_part}."
+                    else:
+                        next_msg = " The speaking test is now complete. Well done!"
+                    spoken = (
+                        f"Your band for that response is {band}. "
+                        f"To improve: {tip}.{next_msg}"
+                    )
+                    return types.FunctionResponse(id=fc.id, name=name, response={"result": spoken})
+                spoken = f"Evaluation completed for Part {part}. Let us continue."
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": spoken})
+            except Exception as e:
+                log.warning(f"Speaking eval processing failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": f"Evaluation completed for Part {part}. Let us continue."})
+        elif name == "ielts_speaking_tips":
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({
+                "tips": [
+                    "Record yourself speaking and listen for filler words",
+                    "Practice Part 2 with a timer — 1 min prep, 2 min speaking",
+                    "Use discourse markers: 'Having said that', 'What's more'",
+                    "Paraphrase the question in your answer to show range"
+                ]
+            })})
+
+        elif name == "ielts_writing_prompt":
+            wa = _get_ielts_writing_analyzer()
+            task = int(args.get("task", 2))
+            if task == 1:
+                result = wa.get_random_task1()
+            else:
+                result = wa.get_random_task2()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSWriting",
+                    "direction": "left",
+                    "data": result
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_writing_evaluate":
+            wa = _get_ielts_writing_analyzer()
+            essay = args.get("essay", "")
+            task_prompt = args.get("task_prompt", "")
+            task_type = args.get("task_type", "opinion")
+            eval_prompt = wa.build_evaluation_prompt(essay, task_prompt, task_type)
+            try:
+                import google.genai as genai
+                client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                resp = await asyncio.to_thread(
+                    lambda: client.models.generate_content(
+                        model="models/gemini-2.5-flash", contents=eval_prompt
+                    )
+                )
+                eval_text = resp.text or ""
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```', eval_text)
+                if json_match:
+                    eval_text = json_match.group(1)
+                else:
+                    brace_start = eval_text.find('{')
+                    brace_end = eval_text.rfind('}')
+                    if brace_start >= 0 and brace_end > brace_start:
+                        eval_text = eval_text[brace_start:brace_end+1]
+                evaluation = json.loads(eval_text)
+            except Exception as e:
+                log.warning(f"Writing eval REST API failed: {e}")
+                evaluation = {
+                    "overall_band": 6.0,
+                    "band_scores": {"task_achievement": 6.0, "coherence_cohesion": 6.0, "lexical_resource": 6.0, "grammatical_range": 6.0},
+                    "strengths": ["Attempted to address the task"],
+                    "improvements": [{"issue": "Develop your ideas more fully with specific examples and complex structures"}],
+                    "word_count": len(essay.split()) if essay else 0,
+                }
+            try:
+                if self.sio:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sio.emit("panel_open", {
+                        "panelType": "IELTSWriting",
+                        "direction": "right",
+                        "data": {"type": "evaluation", **evaluation}
+                    }))
+                wa.save_writing_session(essay, task_prompt, evaluation, task_type)
+            except Exception as e:
+                log.warning(f"Writing eval processing failed: {e}")
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(evaluation)})
+        elif name == "ielts_writing_template":
+            essay_type = args.get("essay_type", "opinion")
+            from ielts_writing import ESSAY_STRUCTURE_TEMPLATES, HIGH_SCORING_PHRASES
+            structure = ESSAY_STRUCTURE_TEMPLATES.get(essay_type, [])
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({
+                "essay_type": essay_type,
+                "structure": structure,
+                "phrases": HIGH_SCORING_PHRASES
+            })})
+
+        elif name == "ielts_grammar_check":
+            text = args.get("text", "")
+            prompt = f"""Check this text for grammar errors in IELTS context. Return JSON:
+{{
+  "errors": [
+    {{"original": "...", "corrected": "...", "type": "..."}}
+  ],
+  "error_count": <number>,
+  "overall_assessment": "..."
+}}
+
+TEXT: {text}"""
+            try:
+                import google.genai as genai
+                client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                resp = client.models.generate_content(
+                    model="models/gemini-2.5-flash", contents=prompt
+                )
+                result = json.loads(resp.text)
+            except Exception as e:
+                result = {"error": str(e), "error_count": 0, "errors": []}
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_reading_start":
+            rs = _get_ielts_reading_session()
+            topic = args.get("topic")
+            result = rs.get_passage(topic)
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSReading",
+                    "direction": "left",
+                    "data": result
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({
+                "title": result["title"],
+                "question_count": result["question_count"],
+                "message": f"Passage '{result['title']}' loaded with {result['question_count']} questions"
+            })})
+
+        elif name == "ielts_reading_check":
+            rs = _get_ielts_reading_session()
+            result = rs.check_answers(
+                args.get("passage_title", ""),
+                args.get("answers", {})
+            )
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSReading",
+                    "direction": "right",
+                    "data": {"type": "results", **result}
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_reading_strategy":
+            rs = _get_ielts_reading_session()
+            result = rs.get_strategy_guide(args.get("question_type", ""))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_vocab_add":
+            vt = _get_ielts_vocab_tracker()
+            result = vt.add_word(
+                args.get("word", ""),
+                args.get("definition", ""),
+                args.get("example", ""),
+                args.get("topic", "general")
+            )
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_vocab_topic":
+            vt = _get_ielts_vocab_tracker()
+            result = vt.get_words_for_topic(args.get("topic", "general"))
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSVocab",
+                    "direction": "left",
+                    "data": result
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_vocab_flashcards":
+            vt = _get_ielts_vocab_tracker()
+            result = vt.get_flashcard_session(args.get("count", 10))
+            if self.sio and result:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSVocab",
+                    "direction": "left",
+                    "data": {"type": "flashcards", "cards": result}
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_vocab_upgrade":
+            vt = _get_ielts_vocab_tracker()
+            result = vt.get_upgrade_suggestions(args.get("text", ""))
+            if self.sio and result:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSVocab",
+                    "direction": "right",
+                    "data": {"type": "upgrade", "suggestions": result}
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(result)})
+
+        elif name == "ielts_study_plan":
+            eng = _get_ielts_engine()
+            hours = float(args.get("hours_per_day", 2))
+            plan = _generate_study_plan(eng.progress, hours)
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("panel_open", {
+                    "panelType": "IELTSProgress",
+                    "direction": "right",
+                    "data": plan
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(plan)})
+
+        elif name == "ielts_mock_test":
+            module = args.get("module", "full")
+            content = {}
+            if module in ("speaking", "full"):
+                ss = _get_ielts_speaking_session()
+                content["speaking"] = ss.get_part1_question()
+            if module in ("writing", "full"):
+                wa = _get_ielts_writing_analyzer()
+                content["writing"] = wa.get_random_task2()
+            if module in ("reading", "full"):
+                rs = _get_ielts_reading_session()
+                content["reading"] = rs.get_passage()
+            if self.sio:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.sio.emit("workflow_start", {
+                    "workflow": "ielts-mock",
+                    "data": {"module": module, "content": content}
+                }))
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({
+                "status": "started",
+                "module": module,
+                "content": {k: {"title" if k == "reading" else "topic": v.get("title" if k == "reading" else "topic", "") if isinstance(v, dict) else "", "type": v.get("type", "") if isinstance(v, dict) and k == "writing" else ""} for k, v in content.items()},
+                "message": f"Starting {module} mock test with {'all modules' if module == 'full' else module}"
+            })})
+
+        elif name == "feelings_store_episode":
+            try:
+                from feelings_tools import feelings_store_episode
+                r = feelings_store_episode(
+                    category=args.get("category", "unknown"),
+                    intensity=args.get("intensity", "MODERATE"),
+                    summary=args.get("summary", ""),
+                    trigger_phrase=args.get("trigger_phrase", ""),
+                    stressor=args.get("stressor", ""),
+                )
+                if r.get("stored") and self.personality:
+                    cat = args.get("category", "")
+                    if cat in ("grief", "depression", "loneliness", "heartbreak"):
+                        from personality import MOODS
+                        if "empathetic" in MOODS:
+                            self.personality.mood.current = "empathetic"
+                    elif cat in ("joy", "excitement", "pride"):
+                        self.personality.mood.current = "excited"
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(r)})
+            except Exception as e:
+                log.warning(f"feelings_store_episode failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({"stored": False})})
+
+        elif name == "feelings_resolve_episode":
+            try:
+                from feelings_tools import feelings_resolve_episode
+                r = feelings_resolve_episode(
+                    episode_id=args.get("episode_id", ""),
+                    resolution=args.get("resolution", "resolved naturally"),
+                )
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(r)})
+            except Exception as e:
+                log.warning(f"feelings_resolve_episode failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({"resolved": False})})
+
+        elif name == "feelings_add_note":
+            try:
+                from feelings_tools import feelings_add_note
+                r = feelings_add_note(
+                    episode_id=args.get("episode_id", ""),
+                    note=args.get("note", ""),
+                )
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(r)})
+            except Exception as e:
+                log.warning(f"feelings_add_note failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({"updated": False})})
+
+        elif name == "feelings_get_history":
+            try:
+                from feelings_tools import feelings_get_history
+                r = feelings_get_history(
+                    days=args.get("days", 30),
+                    category=args.get("category", ""),
+                    include_resolved=args.get("include_resolved", True),
+                )
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(r)})
+            except Exception as e:
+                log.warning(f"feelings_get_history failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({"episodes": []})})
+
+        elif name == "feelings_check_followup":
+            try:
+                from feelings_tools import feelings_check_followup
+                r = feelings_check_followup()
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(r)})
+            except Exception as e:
+                log.warning(f"feelings_check_followup failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({"needs_followup": False})})
+
+        elif name == "feelings_get_profile":
+            try:
+                from feelings_tools import feelings_get_profile
+                r = feelings_get_profile()
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps(r)})
+            except Exception as e:
+                log.warning(f"feelings_get_profile failed: {e}")
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": json.dumps({})})
+
+        elif name == "take_photo":
+            await self._capture_and_send()
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": "Photo captured and sent to your view."})
+
+        log.warning(f"Unknown tool: {name}")
+        return types.FunctionResponse(
+            id=fc.id, name=name,
+            response={"result": f"Tool '{name}' is not implemented."},
+        )
+
+

@@ -1,0 +1,90 @@
+{
+  "projects": [
+    {
+      "name": "ai-autoresponder",
+      "display_name": "AI AUTORESPONDER",
+      "description": "AI-powered multi-platform auto-responder that handles messages across Facebook, Instagram, Telegram, and WhatsApp. Production app with ~20 downloads. Has Android native conversion roadmap with Play Store appeal in progress.",
+      "tech_stack": [
+        "Next.js (React framework)",
+        "Prisma (ORM)",
+        "shadcn/ui (component library)",
+        "PostgreSQL (database)",
+        "Telegram Bot API",
+        "WhatsApp Business API",
+        "Facebook Graph API",
+        "Instagram Basic Display API"
+      ],
+      "status": "Tracked",
+      "folder_path": "",
+      "last_context": "Discussed server issues and Play Store submission. Decided to fix authentication bug before release.",
+      "last_context_time": "2026-06-07 02:36:13",
+      "progress_log": []
+    },
+    {
+      "name": "guardian-anti-theft",
+      "display_name": "Guardian ANTI THEFT",
+      "description": "Android anti-theft security application with Firebase backend and web-based admin panel. Originally named \"SecurePhone\". Production-ready with APK builds and admin dashboard. Needs UI/feature updates.",
+      "tech_stack": [
+        "Kotlin (Android native)",
+        "Firebase Realtime Database",
+        "Firebase Authentication",
+        "MVVM architecture",
+        "Android Services (background monitoring)",
+        "Admin Web Panel (HTML/JS/CSS)"
+      ],
+      "status": "Tracked",
+      "folder_path": "",
+      "last_context": "",
+      "last_context_time": "",
+      "progress_log": []
+    },
+    {
+      "name": "hajj-kafela",
+      "display_name": "Hajj Kafela (মাতৃভূমি হজ্জ কাফেলা)",
+      "description": "Hajj and Umrah package booking platform with bilingual support (Bengali/English). Serves ~40 clicks/day. Admin panel for managing packages, photo albums, and prayer times. Deployed on Vercel with MongoDB and ImageKit for media.",
+      "tech_stack": [
+        "Vite + React (frontend)",
+        "Express.js (backend API)",
+        "MongoDB (database)",
+        "ImageKit (media/image management)",
+        "Vercel (deployment)",
+        "Bilingual (Bangla/English)"
+      ],
+      "status": "Tracked",
+      "folder_path": "",
+      "last_context": "",
+      "last_context_time": "",
+      "progress_log": []
+    },
+    {
+      "name": "wordsnest",
+      "display_name": "WordsNest",
+      "description": "IELTS vocabulary learning Android application with OCR scanning, word search, and analytics. Uses MVVM + Repository pattern with Firebase backend. Includes admin panel deployed on Netlify. Currently has server issues and broken AI features.",
+      "tech_stack": [
+        "Kotlin (Android native)",
+        "MVVM + Repository pattern",
+        "Firebase (Auth, Firestore, Storage)",
+        "CameraX (OCR scanning)",
+        "ML Kit (text recognition)",
+        "Vercel (API server)",
+        "Netlify (admin panel)"
+      ],
+      "status": "Tracked",
+      "folder_path": "",
+      "last_context": "",
+      "last_context_time": "",
+      "progress_log": []
+    },
+    {
+      "name": "aiautoresponder",
+      "display_name": "AI AUTORESPONDER",
+      "description": "Project imported from D:\\AI AUTORESPONDER",
+      "tech_stack": [],
+      "status": "Tracked",
+      "folder_path": "D:\\AI AUTORESPONDER",
+      "last_context": "",
+      "last_context_time": "",
+      "progress_log": []
+    }
+  ]
+}

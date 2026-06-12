@@ -1,0 +1,30 @@
+{
+  "name": "soda-ui",
+  "version": "2.0.0",
+  "description": "S.O.D.A - Smart Open-source Design Assistant",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"py -3.11 backend/server.py\" \"py -3.11 backend/face_server_local.py\" \"vite\" \"wait-on tcp:5173 && electron . --disable-gpu\"",
+    "build": "vite build",
+    "electron": "electron . --disable-gpu"
+  },
+  "keywords": [],
+  "author": "Rahikul Makhtum Abir (RM Abir)",
+  "license": "ISC",
+  "dependencies": {
+    "lucide-react": "^0.300.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "concurrently": "^8.2.2",
+    "electron": "^28.2.0",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.1.0",
+    "wait-on": "^7.2.0"
+  }
+}
