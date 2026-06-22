@@ -133,7 +133,7 @@ export default function ToolShowcaseAnim({ status, data = null }) {
                 </text>
                 <text x={70} y={80} textAnchor="middle" fill={stroke} fillOpacity={0.55}
                   fontSize={5} fontFamily="monospace">
-                  {tool.desc || ''}
+                  {tool.description || ''}
                 </text>
               </>
             ) : (
