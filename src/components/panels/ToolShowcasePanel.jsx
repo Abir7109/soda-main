@@ -61,7 +61,7 @@ function getCategoryForTool(name) {
 }
 
 function toolLabel(name) {
-  return name
+  return (name || '')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase())
 }
@@ -131,9 +131,9 @@ export default function ToolShowcasePanel({ visible, tools, onClose }) {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {tools.map((tool, i) => {
-            const name = tool.name || tool
-            const desc = tool.description || ''
+          {tools.filter(Boolean).map((tool, i) => {
+            const name = (typeof tool === 'string' ? tool : tool?.name) || ''
+            const desc = (typeof tool === 'object' && tool ? tool.description : '') || ''
             const cat = getCategoryForTool(name)
             const isRevealed = i < revealedCount
             const isActive = isRevealed && briefing && briefing.name === name

@@ -96,6 +96,8 @@ export default function ToolShowcaseAnim({ status, data = null }) {
       <circle cx="70" cy="70" r="30" fill="none" stroke={stroke} strokeWidth="0.3" strokeOpacity="0.03" />
 
       {displayed.map((tool, idx) => {
+        const toolName = (typeof tool === 'string' ? tool : tool?.name) || ''
+        const toolDesc = (typeof tool === 'object' && tool ? tool.description : '') || ''
         const isCurrent = idx === displayed.length - 1 && phase === 'cycle'
         const isEntering = entering === idx
         const stackIdx = displayed.length - 2 - idx
@@ -108,7 +110,7 @@ export default function ToolShowcaseAnim({ status, data = null }) {
         const scale = isCurrent ? 1 : 0.78
 
         return (
-          <g key={tool.name}
+          <g key={toolName || idx}
             style={{
               transform: `translateY(${yOffset}px) scale(${scale})`,
               transformOrigin: '70px 66px',
@@ -123,17 +125,16 @@ export default function ToolShowcaseAnim({ status, data = null }) {
                   fill="url(#tsc-glow)" stroke={stroke} strokeWidth={1.2} strokeOpacity={0.6}
                   filter={isEntering ? 'url(#tsc-glow-filter)' : undefined}
                 />
-                {/* HUD scan effect on current card */}
                 <g style={{ animation: 'hud-scan-svg 2s ease-in-out infinite' }}>
                   <line x1="6" y1={94} x2="134" y2={94} stroke={stroke} strokeWidth="0.3" strokeOpacity="0.08" />
                 </g>
                 <text x={70} y={64} textAnchor="middle" fill={stroke} fillOpacity={0.95}
                   fontSize={8.5} fontFamily="monospace" fontWeight="700">
-                  {tool.name.replace(/_/g, ' ')}
+                  {toolName.replace(/_/g, ' ')}
                 </text>
                 <text x={70} y={80} textAnchor="middle" fill={stroke} fillOpacity={0.55}
                   fontSize={5} fontFamily="monospace">
-                  {tool.description || ''}
+                  {toolDesc}
                 </text>
               </>
             ) : (
@@ -143,7 +144,7 @@ export default function ToolShowcaseAnim({ status, data = null }) {
                 />
                 <text x={70} y={56} textAnchor="middle" fill={stroke} fillOpacity={0.25}
                   fontSize={5} fontFamily="monospace">
-                  {tool.name.replace(/_/g, ' ')}
+                  {toolName.replace(/_/g, ' ')}
                 </text>
               </>
             )}
