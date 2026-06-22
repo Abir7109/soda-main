@@ -107,10 +107,25 @@ def _generate_study_plan(progress: dict, hours_per_day: float) -> dict:
         ]
     }
 
-import pyaudio
-import cv2
+try:
+    import pyaudio
+    HAS_PYAUDIO = True
+except ImportError:
+    pyaudio = None
+    HAS_PYAUDIO = False
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    cv2 = None
+    HAS_CV2 = False
 import PIL.Image
-import mss
+try:
+    import mss
+    HAS_MSS = True
+except ImportError:
+    mss = None
+    HAS_MSS = False
 
 from google import genai
 from google.genai import types
@@ -191,7 +206,7 @@ URL_ALIASES = {
     "pypi": "https://pypi.org", "docs": "https://docs.python.org",
 }
 
-FORMAT = pyaudio.paInt16
+FORMAT = pyaudio.paInt16 if pyaudio else None
 CHANNELS = 1
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
@@ -200,10 +215,12 @@ VAD_THRESHOLD = 400
 MODEL = "models/gemini-2.5-flash-native-audio-latest"
 DEFAULT_MODE = "camera"
 
-pya = pyaudio.PyAudio()
+pya = pyaudio.PyAudio() if pyaudio else None
 _client_instance = None
 
 def get_input_devices():
+    if not pya:
+        return []
     devices = []
     for i in range(pya.get_device_count()):
         try:
@@ -805,7 +822,20 @@ class AudioLoop:
             raw = base64.b64decode(msg["data"]) if isinstance(msg["data"], str) else msg["data"]
             await self.session.send_realtime_input(video=types.Blob(data=raw, mime_type=msg["mime_type"]))
 
+    def feed_browser_audio(self, data: bytes):
+        """Accept PCM audio chunks from browser mic (via Socket.IO) and queue for Gemini."""
+        if not self.audio_queue:
+            return
+        try:
+            self.audio_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
+            self._mark_activity()
+        except asyncio.QueueFull:
+            pass
+
     async def listen_audio(self):
+        if not pya:
+            log.info("pyaudio not available — skipping local mic capture (web mode)")
+            return
         mic_info = pya.get_default_input_device_info()
         resolved_idx = None
         if self.input_device_name:

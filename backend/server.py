@@ -4,7 +4,6 @@ import asyncio
 sys.stdout.reconfigure(line_buffering=True)
 
 # Fix for asyncio subprocess support on Windows
-# MUST BE SET BEFORE OTHER IMPORTS
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -22,8 +21,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Ensure we can import soda
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Make package-level imports work
+_pkg_dir = os.path.dirname(os.path.abspath(__file__))
+if _pkg_dir not in sys.path:
+    sys.path.insert(0, _pkg_dir)
 
 import soda
 import scheduler_service as scheduler
@@ -79,7 +80,16 @@ async def lifespan(_app):
             pass
         print("[SERVER] Reminder scheduler stopped")
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app_socketio = socketio.ASGIApp(sio, app)
 
 import signal
@@ -1238,5 +1248,20 @@ async def pastebox_content(sid, data=None):
         print("[SERVER] No pending pastebox request")
 
 
+@sio.event
+async def browser_audio(sid, data):
+    """Receive raw PCM audio chunks from browser mic and feed to AudioLoop."""
+    global audio_loop
+    if not audio_loop:
+        return
+    raw = data.get('audio')
+    if raw is None:
+        return
+    if isinstance(raw, list):
+        raw = bytes(raw)
+    audio_loop.feed_browser_audio(raw)
+
+
 if __name__ == "__main__":
-    uvicorn.run(app_socketio, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app_socketio, host="0.0.0.0", port=port)

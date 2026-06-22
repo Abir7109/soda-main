@@ -100,25 +100,26 @@ export default function WorkflowNewsBriefing({ data, onComplete }) {
 
   useEffect(() => {
     if (!activeArticle?.url) return
-    const hasExisting = !!webviewRef.current?.querySelector('webview')
+    const hasExisting = !!webviewRef.current?.querySelector('iframe.wfn-article-frame')
     if (hasExisting) setSwitching(true)
     const tid = setTimeout(() => {
       const container = webviewRef.current
       if (!container) return
-      const old = container.querySelector('webview')
+      const old = container.querySelector('iframe.wfn-article-frame')
       if (old) {
         WebviewActionService.unregister(WEBVIEW_ID)
         old.remove()
       }
-      const wv = document.createElement('webview')
-      wv.src = activeArticle.url
-      wv.setAttribute('allowpopups', '')
-      wv.setAttribute('nodeintegration', '')
-      wv.style.width = '100%'
-      wv.style.height = '100%'
-      wv.style.border = 'none'
-      container.appendChild(wv)
-      WebviewActionService.register(WEBVIEW_ID, wv)
+      const ifr = document.createElement('iframe')
+      ifr.src = activeArticle.url
+      ifr.className = 'wfn-article-frame'
+      ifr.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups')
+      ifr.style.width = '100%'
+      ifr.style.height = '100%'
+      ifr.style.border = 'none'
+      ifr.style.background = '#fff'
+      container.appendChild(ifr)
+      WebviewActionService.register(WEBVIEW_ID, ifr)
       setSwitching(false)
     }, hasExisting ? 350 : 50)
     return () => { clearTimeout(tid); setSwitching(false) }

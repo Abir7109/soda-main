@@ -10,3 +10,7 @@ temp/
 
 # Local Netlify folder
 .netlify
+
+# Server logs
+backend_server.err
+test_vision_output.png

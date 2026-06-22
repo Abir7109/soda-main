@@ -1,0 +1,24 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.env
+.git/
+.gitignore
+*.md
+.vscode/
+projects/
+temp/
+electron/
+src/
+index.html
+vite.config.js
+package.json
+package-lock.json
+node_modules/
+postcss.config.mjs
+tailwind.config.js
+animation-workspace/
+soda-face-api/
+soda-remote/
+Website builder agent/

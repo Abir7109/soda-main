@@ -38,6 +38,7 @@ import WorkflowOverlay from './components/workflows/WorkflowOverlay'
 import Notepad from './components/Notepad'
 import BackgroundWidget from './components/BackgroundWidget'
 import PasteBox from './components/pastebox/PasteBox'
+import useBrowserMic from './services/useBrowserMic'
 // --- Frontend Error Logging ---
 if (typeof socket !== 'undefined') {
   window.onerror = (msg, url, line, col, err) => {
@@ -557,6 +558,9 @@ export default function App() {
   const workflowRef = useRef(null)
   const workflowDismissRef = useRef(null)
 
+  // ── Browser mic capture (web) ──
+  const { micActive: browserMicActive, micError: browserMicError, start: startBrowserMic, stop: stopBrowserMic } = useBrowserMic(socket)
+
   // ── Frontend audio playback via Web Audio API ──
   const audioCtxRef = useRef(null)
   const audioNextTime = useRef(0)
@@ -622,6 +626,7 @@ export default function App() {
       if (connectGuardRef.current) return
       connectGuardRef.current = true
       socket.emit('start_audio')
+      startBrowserMic()
       if (!audioReadyRef.current) {
         audioReadyRef.current = true
         setTimeout(() => {

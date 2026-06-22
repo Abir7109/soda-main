@@ -21,15 +21,18 @@ class WebviewActionService {
     return Array.from(this.webviews.keys())
   }
 
-  async executeJS(id, code) {
-    const wv = this.webviews.get(id)
-    if (!wv) return { error: 'webview_not_found' }
+  async executeJS(id, _code) {
+    const el = this.webviews.get(id)
+    if (!el) return { error: 'webview_not_found' }
     try {
-      const result = await wv.executeJavaScript(code)
-      return { success: true, result }
-    } catch (err) {
-      return { error: err.message }
-    }
+      if (el.contentWindow) {
+        const origin = el.src ? new URL(el.src).origin : ''
+        if (origin && origin !== window.location.origin) {
+          return { error: 'cannot execute JS in cross-origin iframe' }
+        }
+      }
+    } catch {}
+    return { error: 'executeJS not supported in browser iframe mode' }
   }
 
   async click(id, selector) {
@@ -113,42 +116,52 @@ class WebviewActionService {
   }
 
   async getUrl(id) {
-    return this.executeJS(id, `{ url: location.href, title: document.title }`)
+    const el = this.webviews.get(id)
+    if (!el) return { error: 'webview_not_found' }
+    try {
+      const src = el.src
+      return { success: true, result: { url: src || '', title: el.title || '' } }
+    } catch { return { error: 'failed to get url' } }
   }
 
   async goBack(id) {
-    return this.executeJS(id, `window.history.back(); { success: true }`)
+    const el = this.webviews.get(id)
+    if (!el) return { error: 'webview_not_found' }
+    try { el.contentWindow?.history?.back(); return { success: true } }
+    catch { return { error: 'cannot go back' } }
   }
 
   async goForward(id) {
-    return this.executeJS(id, `window.history.forward(); { success: true }`)
+    const el = this.webviews.get(id)
+    if (!el) return { error: 'webview_not_found' }
+    try { el.contentWindow?.history?.forward(); return { success: true } }
+    catch { return { error: 'cannot go forward' } }
   }
 
   async navigate(id, url) {
-    const wv = this.webviews.get(id)
-    if (!wv) return { error: 'webview_not_found' }
+    const el = this.webviews.get(id)
+    if (!el) return { error: 'webview_not_found' }
+    el.src = url
     return new Promise((resolve) => {
       const handler = () => {
-        wv.removeEventListener('did-finish-load', handler)
-        resolve({ success: true, url: wv.getURL(), title: wv.getTitle() })
+        el.removeEventListener('load', handler)
+        resolve({ success: true, url: el.src })
       }
-      wv.addEventListener('did-finish-load', handler)
-      wv.loadURL(url)
+      el.addEventListener('load', handler)
     })
   }
 
   async waitForLoad(id, timeoutMs = 10000) {
-    const wv = this.webviews.get(id)
-    if (!wv) return { error: 'webview_not_found' }
-    if (wv.isLoading && !wv.isLoading()) return { success: true, loaded: true }
+    const el = this.webviews.get(id)
+    if (!el) return { error: 'webview_not_found' }
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolve({ success: false, error: 'timeout' }), timeoutMs)
       const handler = () => {
         clearTimeout(timer)
-        wv.removeEventListener('did-finish-load', handler)
-        resolve({ success: true, url: wv.getURL(), title: wv.getTitle() })
+        el.removeEventListener('load', handler)
+        resolve({ success: true, url: el.src })
       }
-      wv.addEventListener('did-finish-load', handler)
+      el.addEventListener('load', handler)
     })
   }
 }
