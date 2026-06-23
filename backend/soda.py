@@ -1057,9 +1057,6 @@ class AudioLoop:
             ),
             system_instruction=system_prompt,
             tools=tools_list,
-            history_config=types.HistoryConfig(
-                initial_history_in_client_content=True
-            ),
         )
 
         while not self.stop_event.is_set():
