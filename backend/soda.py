@@ -1123,6 +1123,9 @@ class AudioLoop:
                 break
             except Exception as e:
                 log.error(f"Connection error: {e}")
+                traceback.print_exc()
+                if self.on_error:
+                    self.on_error(f"Gemini connection failed: {e}")
                 if self.stop_event.is_set():
                     break
                 log.warning(f"Reconnecting in {retry_delay}s...")
