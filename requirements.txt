@@ -3,7 +3,7 @@ uvicorn[standard]
 gunicorn
 python-socketio
 python-multipart
-google-genai
+google-genai>=2.9.0
 python-telegram-bot
 aiohttp
 opencv-python-headless

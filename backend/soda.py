@@ -256,7 +256,7 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 512
 VAD_THRESHOLD = 400
-MODEL = "models/gemini-2.5-flash-native-audio-latest"
+MODEL = "models/gemini-3.1-flash-live-preview"
 DEFAULT_MODE = "camera"
 
 pya = pyaudio.PyAudio() if pyaudio else None
@@ -758,8 +758,7 @@ class AudioLoop:
             self.on_transcription({"sender": "User", "text": text})
         if self.video_queue and self._latest_image_payload:
             await self.video_queue.put(self._latest_image_payload)
-        content = types.Content(role="user", parts=[types.Part(text=text)])
-        await self.session.send_client_content(turns=content, turn_complete=True)
+        await self.session.send_realtime_input(text=text)
 
     async def inject_audio(self, base64_pcm):
         """Inject PCM audio from mobile mic into Gemini session."""
@@ -836,10 +835,7 @@ class AudioLoop:
             + "\n".join(lines)
         )
         try:
-            await self.session.send_client_content(
-                turns=types.Content(role='user', parts=[types.Part(text=summary)]),
-                turn_complete=True,
-            )
+            await self.session.send_realtime_input(text=summary)
             self._last_refresh_turn = self._turn_count
             log.info(f"Context refresh injected at turn {self._turn_count}")
         except Exception as e:
@@ -1060,6 +1056,9 @@ class AudioLoop:
             ),
             system_instruction=system_prompt,
             tools=tools_list,
+            history_config=types.HistoryConfig(
+                initial_history_in_client_content=True
+            ),
         )
 
         while not self.stop_event.is_set():
@@ -1114,13 +1113,7 @@ class AudioLoop:
                                 "from where we left off. Do NOT read this aloud.]\n"
                                 + "\n".join(context_lines)
                             )
-                            await self.session.send_client_content(
-                                turns=types.Content(
-                                    role='user',
-                                    parts=[types.Part(text=context)]
-                                ),
-                                turn_complete=True,
-                            )
+                            await self.session.send_realtime_input(text=context)
                             log.info(f"Injected {len(context_lines)} context lines on reconnect")
 
                     retry_delay = 1
