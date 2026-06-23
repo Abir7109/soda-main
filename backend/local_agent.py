@@ -30,7 +30,9 @@ if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
 # ── File Logging (pythonw.exe has no console, so log() is invisible) ──
-_agent_log_file = os.path.join(os.path.dirname(_script_dir), "agent.log")
+# PID suffix prevents zombie/duplicate agent log interleaving
+_agent_pid = os.getpid()
+_agent_log_file = os.path.join(os.path.dirname(_script_dir), f"agent_{_agent_pid}.log")
 
 def log(msg):
     """Write to both stdout AND agent.log (pythonw.exe-safe)."""
@@ -1388,8 +1390,7 @@ def _heartbeat_loop():
         if sio.connected:
             log(f"[LocalAgent] ⚡ Alive — connected to {BACKEND_URL} | {len(LOCAL_TOOLS)} tools loaded")
         else:
-            log(f"[LocalAgent] ❌ Disconnected. Attempting reconnect...")
-            break
+            log(f"[LocalAgent] ❌ Disconnected — will auto-reconnect...")
 
 
 if __name__ == "__main__":
@@ -1402,6 +1403,7 @@ if __name__ == "__main__":
     log(f"  Backend:  {BACKEND_URL}")
     log(f"  Platform: {sys.platform}")
     log(f"  Tools:    {len(LOCAL_TOOLS)}")
+    log(f"  Log:      {_agent_log_file}")
     log(f"  Deps:     pyautogui={'OK' if HAS_PYAUTOGUI else 'MISS'}, "
           f"mss={'OK' if HAS_MSS else 'MISS'}, "
           f"pyperclip={'OK' if HAS_PYPERCLIP else 'MISS'}, "
