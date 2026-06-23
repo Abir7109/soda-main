@@ -184,6 +184,7 @@ LOCAL_AGENT_TOOLS = {
     # Window / app management (Windows-only)
     "close_window", "close_app", "open_app", "window_manage",
     "window_focus", "window_get_info", "get_active_window",
+    "window_list", "window_move",
     # System control (volume, brightness, power, screenshot)
     "control_system",
     # File operations (local filesystem)
@@ -198,6 +199,7 @@ LOCAL_AGENT_TOOLS = {
     "clipboard_read", "clipboard_write",
     # Mouse / keyboard / UI automation
     "mouse_click", "mouse_move", "mouse_scroll",
+    "mouse_drag", "mouse_get_pos", "mouse_hover", "mouse_right_click",
     "keyboard_type", "keyboard_press", "keyboard_hotkey",
     "click_image", "click_text",
     # Screenshot
@@ -209,8 +211,14 @@ LOCAL_AGENT_TOOLS = {
     # UI automation
     "ui_find_image", "ui_click_image", "ui_click_text",
     "ui_wait_for_image", "ui_drag_drop",
-    # System info
+    # Messaging (runs locally — WhatsApp/Telegram Desktop required)
+    "send_whatsapp", "whatsapp_find_and_call", "whatsapp_find_and_message",
+    "send_telegram_message", "send_telegram_file",
+    # System info / agent control
     "get_system_status",
+    "go_to_sleep", "wake_up", "go_background", "come_back",
+    # Other
+    "send_keys_window",
 }
 
 SODA_WAKE_PATTERN = re.compile(
@@ -2196,24 +2204,16 @@ class AudioLoop:
             )
 
         elif name == "play_music":
-            query = args.get("query", "")
-            asyncio.create_task(self._background_play_music(query))
             return types.FunctionResponse(
                 id=fc.id, name=name,
-                response={"result": f"Playing {query} on Spotify now."}
+                response={"success": False, "error": "No local agent connected — cannot control Spotify on this machine."}
             )
 
         elif name == "control_music":
-            action = args.get("action", "")
-            if spotify_bridge is None:
-                return types.FunctionResponse(id=fc.id, name=name, response={"result": "Spotify control not available on this platform"})
-            if action == "play_pause":
-                spotify_bridge.play_pause()
-            elif action == "next":
-                spotify_bridge.next_track()
-            elif action == "previous":
-                spotify_bridge.previous_track()
-            return types.FunctionResponse(id=fc.id, name=name, response={"result": f"Music {action}."})
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"success": False, "error": "No local agent connected — cannot control Spotify on this machine."}
+            )
 
         elif name == "mouse_click":
             screen_control.mouse_click(
@@ -2490,21 +2490,22 @@ class AudioLoop:
             return types.FunctionResponse(id=fc.id, name=name, response={"result": "Searching YouTube."})
 
         elif name == "whatsapp_find_and_call":
-            r = await whatsapp_bridge.call_contact(args.get("contact_name", ""))
-            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"success": False, "error": "No local agent connected — WhatsApp Desktop required on your PC."}
+            )
 
         elif name == "whatsapp_find_and_message":
-            r = await whatsapp_bridge.message_contact(
-                args.get("contact_name", ""), args.get("message", "")
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"success": False, "error": "No local agent connected — WhatsApp Desktop required on your PC."}
             )
-            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
 
         elif name == "send_whatsapp":
-            r = await whatsapp_bridge.message_contact(
-                args.get("contact_name", "") or args.get("contact", ""),
-                args.get("message", "")
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"success": False, "error": "No local agent connected — WhatsApp Desktop required on your PC."}
             )
-            return types.FunctionResponse(id=fc.id, name=name, response={"result": r})
 
         elif name == "send_discord":
             system_app.send_discord(args.get("contact", ""), args.get("message", ""))
