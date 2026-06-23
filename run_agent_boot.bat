@@ -23,4 +23,7 @@ echo [%date% %time%] Script: %AGENT_DIR%\local_agent.py >> "%LOG_FILE%"
 
 start "" "%PYTHON%" -u "%AGENT_DIR%\local_agent.py"
 
-echo [%date% %time%] Agent launched. PID: %ERRORLEVEL% >> "%LOG_FILE%"
+:: Get the actual PID of the agent
+for /f "tokens=2" %%a in ('tasklist /fi "IMAGENAME eq pythonw.exe" /nh 2^>nul') do set "AGENT_PID=%%a"
+echo [%date% %time%] Agent launched successfully. PID: %AGENT_PID% >> "%LOG_FILE%"
+echo Agent PID: %AGENT_PID%

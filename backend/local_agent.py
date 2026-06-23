@@ -1261,13 +1261,13 @@ def _await_it(coro):
 
 
 def _heartbeat_loop():
-    """Print a heartbeat every 60 seconds so user knows agent is alive."""
+    """Print a heartbeat every 30 seconds so user knows agent is alive."""
     while True:
-        time.sleep(60)
+        time.sleep(30)
         if sio.connected:
-            print(f"[LocalAgent] Alive — connected to {BACKEND_URL}, tools: {len(LOCAL_TOOLS)}")
+            print(f"[LocalAgent] ⚡ Alive — connected to {BACKEND_URL} | {len(LOCAL_TOOLS)} tools loaded")
         else:
-            print(f"[LocalAgent] Disconnected. Waiting...")
+            print(f"[LocalAgent] ❌ Disconnected. Attempting reconnect...")
             break
 
 
@@ -1291,7 +1291,8 @@ if __name__ == "__main__":
         sio.connect(BACKEND_URL, transports=["websocket", "polling"], wait_timeout=10)
         # Start heartbeat in background
         threading.Thread(target=_heartbeat_loop, daemon=True).start()
-        print(f"[LocalAgent] Waiting for commands from backend...")
+        print(f"[LocalAgent] ✅ ALIVE — waiting for commands from backend...")
+        print(f"[LocalAgent] 💡 Say something to SODA in the browser, like 'open notepad' or 'list my desktop files'")
         sio.wait()
     except KeyboardInterrupt:
         print("\n[LocalAgent] Shutting down")
