@@ -708,6 +708,7 @@ export default function App() {
       const confirmed = detail && typeof detail.confirmed === 'boolean' ? detail.confirmed : true
       setTask((prev) => {
         if (!prev || prev.id !== id) return prev
+        if (prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') return prev
         if (!confirmed) {
           pendingIdRef.current = null
           // Close tool panel if it was showing confirmation
@@ -812,7 +813,7 @@ export default function App() {
         'list_processes', 'get_ip_info', 'define_word', 'get_wikipedia_summary'
       ])
       if (!persistentAnims.has(data.tool)) {
-        markDone()
+        markDone(data.tool === 'play_music')
       } else {
         setTask((prev) => {
           if (!prev || prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') return prev
@@ -1028,7 +1029,7 @@ export default function App() {
       setTaskData(null)
     }
 
-    const markDone = () => {
+    const markDone = (immediate = false) => {
       setTask((prev) => {
         if (!prev || prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') return prev
         return { ...prev, status: 'done' }
@@ -1037,7 +1038,7 @@ export default function App() {
       clearTaskTimeoutRef.current = setTimeout(() => {
         setTask(null)
         setTaskData(null)
-      }, 500)
+      }, immediate ? 0 : 500)
     }
 
     window.addEventListener('soda:tool-resolved', handleResolve)
@@ -1057,6 +1058,10 @@ export default function App() {
     socket.on('webpage_content', onWebpageContent)
     socket.on('file_list', onFileList)
     socket.on('tool_result', onToolResult)
+    socket.on('now_playing', (data) => {
+      setTaskData(data)
+      setTimeout(() => setTaskData(null), 4000)
+    })
     socket.on('panel_open', onPanelOpen)
     socket.on('error', onError)
     socket.on('close_panel', onClosePanel)
@@ -1282,6 +1287,7 @@ export default function App() {
       socket.off('file_list', onFileList)
       socket.off('scraped_data', onScrapedData)
       socket.off('tool_result', onToolResult)
+      socket.off('now_playing')
       socket.off('panel_open', onPanelOpen)
       socket.off('error', onError)
       socket.off('close_panel', onClosePanel)

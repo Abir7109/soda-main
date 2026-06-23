@@ -1309,7 +1309,10 @@ class AudioLoop:
                             if self.sio:
                                 loop = asyncio.get_event_loop()
                                 loop.create_task(self.sio.emit("tool_confirmation_request", {
-                                    "id": fc.id, "tool": fc.name, "args": fc.args,
+                                    "id": fc.id,
+                                    "tool": fc.name,
+                                    "args": fc.args,
+                                    "auto_allowed": fc.name not in ("write_file", "send_whatsapp", "whatsapp_find_and_message", "send_discord"),
                                 }))
 
                             tasks.append(self._dispatch_tool(fc))
@@ -1336,7 +1339,7 @@ class AudioLoop:
                                     else:
                                         self.personality.mood.record_success()
                                     if self.sio:
-                                        result_data = result.response.get("result", "")
+                                        result_data = result.response
                                         loop = asyncio.get_event_loop()
                                         loop.create_task(self.sio.emit("tool_result", {
                                             "tool": result.name, "result": result_data,

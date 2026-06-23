@@ -66,6 +66,7 @@ export default function TaskAnimator() {
       const confirmed = detail && typeof detail.confirmed === 'boolean' ? detail.confirmed : true
       setTask((prev) => {
         if (!prev || prev.id !== id) return prev
+        if (prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') return prev
         if (!confirmed) {
           pendingIdRef.current = null
           lastConfirmationRef.current = null
