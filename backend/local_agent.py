@@ -357,6 +357,26 @@ def _dispatch(tool, args):
                 except:
                     return False
 
+        # ── 0. Try URI scheme (fastest — no search needed) ───
+        # Apps like WhatsApp register URI handlers (whatsapp://)
+        _URI_APPS = {
+            "whatsapp": "whatsapp://",
+            "telegram": "tg://",
+            "discord": "discord://",
+            "spotify": "spotify://",
+            "zoom": "zoommtg://",
+            "teams": "msteams://",
+            "skype": "skype://",
+            "signal": "signal://",
+        }
+        if app_lower in _URI_APPS:
+            try:
+                subprocess.Popen(["start", "", _URI_APPS[app_lower]], shell=True)
+                if _verify_started():
+                    return {"success": True, "app": app, "method": "uri"}
+            except:
+                pass
+
         # ── 1. KNOWN_APPS (preset common apps) ────────────────
         KNOWN_APPS = {
             "chrome": ["chrome.exe", r"C:\Program Files\Google\Chrome\Application\chrome.exe"],
@@ -457,16 +477,21 @@ def _dispatch(tool, args):
                 pass
 
         # ── 5. Search Microsoft Store / AppX packages ─────────
-        # Store apps (WhatsApp, Spotify, etc.) need AUMID launch via shell:AppsFolder
+        # Store apps (WhatsApp, Spotify, etc.) need AUMID launch via shell:AppsFolder.
+        # Uses Get-AppxPackage (fast, queries package DB) instead of Get-StartApps (slow).
         try:
             _ps_cmd = (
-                "$apps = @(Get-StartApps | Where-Object { $_.Name -like '*" + app_lower.replace("'", "''") +
-                "*' } | Select-Object -First 3); "
-                "if ($apps.Count -gt 0) { foreach ($a in $apps) { Write-Output $a.AppId } }"
+                "$pkg = Get-AppxPackage -Name '*" + app_lower.replace("'", "''") +
+                "*' | Select-Object -First 1; "
+                "if ($pkg) { "
+                "  $manifest = [xml](Get-Content (Join-Path $pkg.InstallLocation 'AppxManifest.xml')); "
+                "  $appId = $manifest.Package.Applications.Application.Id; "
+                "  Write-Output \"$($pkg.PackageFamilyName)!$appId\" "
+                "}"
             )
             _result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", _ps_cmd],
-                capture_output=True, text=True, timeout=10
+                capture_output=True, text=True, timeout=8
             )
             if _result.returncode == 0 and _result.stdout.strip():
                 for _aumid in _result.stdout.strip().split("\n"):
