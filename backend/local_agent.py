@@ -523,21 +523,44 @@ def _dispatch(tool, args):
         except:
             pass
 
-        # ── 7. FINAL FALLBACK: PyAutoGUI Start Menu search ────
+        # ── 7. PowerShell SendKeys Start Menu search ───────────
+        for _attempt in range(3):
+            try:
+                _search_ps = (
+                    "$null = Add-Type -AssemblyName System.Windows.Forms; "
+                    "[System.Windows.Forms.SendKeys]::SendWait('^{ESC}'); "
+                    "Start-Sleep -Milliseconds 1000; "
+                    "[System.Windows.Forms.SendKeys]::SendWait('" + app.replace("'", "''") + "'); "
+                    "Start-Sleep -Milliseconds 2000; "
+                    "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); "
+                    "Start-Sleep -Milliseconds 2000"
+                )
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", _search_ps],
+                    capture_output=True, timeout=8
+                )
+                if _verify_started(2.0):
+                    return {"success": True, "app": app, "method": "powershell_search"}
+            except:
+                time.sleep(1)
+                continue
+
+        # ── 8. PyAutoGUI fallback (if available) ──────────────
         if HAS_PYAUTOGUI:
             import pyautogui
-            try:
-                pyautogui.press("win")
-                time.sleep(0.8)
-                pyautogui.write(app, interval=0.05)
-                time.sleep(1.5)
-                pyautogui.press("enter")
-                time.sleep(2)
-                if _verify_started(1.5):
-                    return {"success": True, "app": app, "method": "pyautogui_start"}
-                return {"success": False, "error": f"PyAutoGUI Start Menu search did not open '{app}'", "not_found": True}
-            except Exception as e:
-                return {"success": False, "error": f"PyAutoGUI failed: {e}"}
+            for _attempt in range(2):
+                try:
+                    time.sleep(0.5)
+                    pyautogui.hotkey("win", "s")
+                    time.sleep(1.0)
+                    pyautogui.write(app, interval=0.05)
+                    time.sleep(1.5)
+                    pyautogui.press("enter")
+                    time.sleep(2)
+                    if _verify_started(1.5):
+                        return {"success": True, "app": app, "method": "pyautogui_start"}
+                except:
+                    time.sleep(1)
 
         # ── All methods exhausted ─────────────────────────────
         return {"success": False, "error": f"Could not find '{app}' installed on this system. Try searching the web for it.", "not_found": True}
