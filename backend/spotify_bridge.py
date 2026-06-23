@@ -6,6 +6,7 @@ Two-step flow: Enter opens top result, then click big play button at top of page
 
 import os
 import re
+import json
 import time
 import subprocess
 import ctypes
@@ -30,6 +31,10 @@ from play_history import find_similar, record_play
 
 _SPOTIFY_BIG_PLAY_TEMPLATE = os.path.join(
     os.path.dirname(__file__), "vision_templates", "spotify_big_play.png"
+)
+
+_PLAY_BUTTON_CALIBRATION = os.path.join(
+    os.path.dirname(__file__), "play_button_calibration.json"
 )
 
 # Cooldown: after play_music succeeds, ignore control_music for this many seconds.
@@ -128,6 +133,47 @@ def _click_play_area():
     if _wait_for_playback(timeout=5.0):
         log.info(f"[Spotify] Playback confirmed via area click ({cx},{cy})")
         return True
+    return False
+
+
+def _click_trained_play_button():
+    """Click the play button using user-trained calibration from train_play_button.py.
+    Method 0 (highest priority) — uses percentage offsets saved by the training script.
+    Falls through silently if calibration file doesn't exist."""
+    if not os.path.exists(_PLAY_BUTTON_CALIBRATION):
+        return False
+    try:
+        with open(_PLAY_BUTTON_CALIBRATION) as f:
+            cal = json.load(f)
+    except Exception:
+        return False
+    x_pct = cal.get("x_pct")
+    y_pct = cal.get("y_pct")
+    if x_pct is None or y_pct is None:
+        return False
+    rect = _get_spotify_rect()
+    if not rect:
+        return False
+    left, top, right, bottom = rect
+    w, h = right - left, bottom - top
+    cx = left + int(w * x_pct)
+    cy = top + int(h * y_pct)
+    if not _within_spotify_bounds(cx, cy):
+        log.warning(f"[Spotify] Trained click ({cx},{cy}) outside bounds — skipping")
+        return False
+    log.info(f"[Spotify] Clicking trained play button ({cx},{cy}) at {x_pct*100:.1f}%,{y_pct*100:.1f}%")
+    pyautogui.click(cx, cy)
+    time.sleep(1.5)
+    if _wait_for_playback(timeout=6.0):
+        log.info(f"[Spotify] Playback confirmed via trained click")
+        return True
+    log.info(f"[Spotify] Trained click didn't start playback — retrying")
+    if _within_spotify_bounds(cx, cy):
+        pyautogui.click(cx, cy)
+        time.sleep(1.0)
+        if _wait_for_playback(timeout=5.0):
+            log.info(f"[Spotify] Playback confirmed via trained click retry")
+            return True
     return False
 
 
@@ -566,6 +612,14 @@ def play_music_result(query, index):
             _maximize_soda()
             return {"success": True, "query": query, "now_playing": now_playing}
 
+        # Method 0: User-trained play button click (set via train_play_button.py)
+        if _click_trained_play_button():
+            _mark_play_started()
+            now_playing = _get_now_playing()
+            record_play(query, _get_window_title())
+            _maximize_soda()
+            return {"success": True, "query": query, "now_playing": now_playing}
+
         if _click_play_area():
             _mark_play_started()
             now_playing = _get_now_playing()
@@ -631,6 +685,17 @@ def play_music(query, emit_callback=None):
             _maximize_soda()
             if emit_callback:
                 emit_callback({"event": "now_playing", "data": now_playing or {"query": query}})
+            return {"success": True, "query": query, "now_playing": now_playing}
+
+        # Method 0: User-trained play button click (set via train_play_button.py)
+        if _click_trained_play_button():
+            _mark_play_started()
+            now_playing = _get_now_playing()
+            record_play(query, _get_window_title())
+            log.info(f"[Spotify] Playback via trained click")
+            _maximize_soda()
+            if emit_callback and now_playing:
+                emit_callback({"event": "now_playing", "data": now_playing})
             return {"success": True, "query": query, "now_playing": now_playing}
 
         # Method 1: Simple area click (fast, no dependencies)

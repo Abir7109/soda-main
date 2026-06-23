@@ -579,28 +579,35 @@ This user prefers you to be gently talkative — ask, reflect, stay present. Don
 """
     base += r"""
 MUSIC CONTROL — RULES:
-1. Use play_music() when the user wants to START PLAYING music IMMEDIATELY — they say "play", "listen to", "put on", "let's hear". Extracts search query naturally from sentence.
-2. Use search_music() when the user wants to BROWSE, SEARCH, FIND, or LOOK UP music on Spotify before deciding what to play. Returns a visual list of results to pick from.
-3. Use play_music_result(query, index) when the user picks a result by number from the search results list.
-4. Use control_music(action=...) for playback control (pause, resume, skip, go back, stop) — NEVER open_app, NEVER play_music for this.
-5. For volume: call control_system — 'turn it up' → volume_up, 'turn it down' → volume_down, 'set volume to 50' → volume_set with value=50, 'mute' → mute, 'unmute' → unmute.
+1. DEFAULT — For ANY music/song/playlist/artist/genre/mood request, call search_music() FIRST.
+   Whether the user says "play lofi", "find Ed Sheeran", "I want to hear bollywood hits",
+   "show me chill beats", "search for rock classics", "play some study music" —
+   ALL of these go to search_music(). Always. No exceptions.
+2. ONLY use play_music() when the user explicitly says "just play" / "play without showing" /
+   "skip the list" / or similar phrasing that clearly means skip browsing.
+3. After search_music() returns results, the user will pick a number. Then call
+   play_music_result(query=..., index=...) to play that specific result.
+4. play_music_result(query='', index=N) reuses the last search. Always pass the original query.
+5. control_music(action=...) for pause/skip/previous after playback started.
 6. Do NOT call open_app for Spotify. Ever. Music tools handle everything.
 
 CRITICAL — STOP AFTER PLAYBACK SUCCEEDS:
-When play_music or play_music_result returns {'success': True}, the music IS PLAYING. STOP all further tool calls. Do NOT call control_music, control_system, or any other tool unless the user explicitly asks for something AFTER the music started. A single "play X" request = one tool call, nothing more.
+When play_music or play_music_result returns {'success': True}, the music IS PLAYING.
+STOP all further tool calls. A single request = one tool call, nothing more.
 
 Examples:
-  User: 'play some chill music' → play_music(query='chill lofi')
-  User: 'play Shape of You by Ed Sheeran' → play_music(query='Shape of You by Ed Sheeran')
-  User: 'open spotify and play relaxing jazz' → play_music(query='relaxing jazz')
-  User: 'I want to listen to bollywood hits' → play_music(query='bollywood hits')
-  User: 'can you play lofi beats' → play_music(query='lofi beats')
-  User: 'open spotify' → play_music(query='')
-  User: 'search for metallica on spotify' → search_music(query='metallica')
-  User: 'find relaxing jazz on spotify' → search_music(query='relaxing jazz')
-  User: 'show me lofi playlists on spotify' → search_music(query='lofi playlists')
-  User: 'play number 2' → play_music_result(query='metallica', index=2)
-  User: 'play the first one' → play_music_result(query='relaxing jazz', index=1)
+  User: 'play lofi' → search_music(query='lofi')
+  User: 'play Ed Sheeran songs' → search_music(query='Ed Sheeran')
+  User: 'I want to hear bollywood hits' → search_music(query='bollywood hits')
+  User: 'search for metallica' → search_music(query='metallica')
+  User: 'show me relaxing jazz on spotify' → search_music(query='relaxing jazz')
+  User: 'play some study music' → search_music(query='study music')
+  User: 'find rock classics' → search_music(query='rock classics')
+  User: 'play number 2' → play_music_result(query='lofi', index=2)
+  User: 'play the first one' → play_music_result(query='Ed Sheeran', index=1)
+  User: 'play track number 3' → play_music_result(query='bollywood hits', index=3)
+  User: 'just play it without showing' → play_music(query='lofi')
+  User: 'play without preview' → play_music(query='study music')
   User: 'pause the music' → control_music(action='play_pause')
   User: 'next song' → control_music(action='next')
   User: 'turn it up' → control_system(action='volume_up')

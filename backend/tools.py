@@ -547,25 +547,21 @@ welcome_home_tool = {
 play_music_tool = {
     "name": "play_music",
     "description": (
-        "Search and PLAY music on Spotify immediately. "
-        "Use ONLY when the user wants to START PLAYING right now — they say 'play', 'listen to', 'put on', 'let's hear'. "
-        "Understand what the user wants and extract the search query naturally from their words. "
-        "Opens Spotify, searches for the requested content, and PLAYS the top result. "
-        "Automatically sets volume to 80%. "
-        "When play_music returns {'success': True}, the music is already playing. "
-        "Do NOT call control_music or any other tool unless the user explicitly asks to pause/skip/stop AFTER playback started. "
-        "If the user wants to BROWSE, SEARCH, or FIND music before picking — use search_music instead. "
-        "Do NOT call open_app for Spotify — call play_music directly. "
-        "If query is empty or generic (e.g. 'some songs'), Spotify opens but you should ask what they'd like to hear. "
-        "Examples: play_music(query='chill lofi'), play_music(query='rock classics'), "
-        "play_music(query='Shape of You by Ed Sheeran'), play_music(query='focus study music'), play_music(query='')"
+        "Search and PLAY music on Spotify immediately — skips browsing. "
+        "ONLY use this when the user explicitly says 'just play', 'play without showing', "
+        "'skip the list', or similar phrasing that means skip browsing. "
+        "For ALL normal music requests (play, find, search, listen to, hear), use search_music instead. "
+        "Opens Spotify, searches, and plays the top result. Sets volume to 80%. "
+        "If query is empty, opens Spotify to ask what they'd like. "
+        "When success=True, music is playing. Stop all further tool calls. "
+        "Examples: play_music(query='chill lofi'), play_music(query='')"
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "query": {
                 "type": "STRING",
-                "description": "The search query extracted naturally from the user's request — genre, mood, artist, song, or playlist name. Can be empty to just open Spotify and ask. Examples: 'chill lofi', 'rock classics', 'Shape of You by Ed Sheeran', 'focus study music', 'my liked songs', ''"
+                "description": "Search query. Can be empty to just open Spotify. Examples: 'chill lofi', ''"
             }
         },
         "required": ["query"]
@@ -632,23 +628,22 @@ control_system_tool = {
 search_music_tool = {
     "name": "search_music",
     "description": (
-        "Search and BROWSE music on Spotify — returns a list of results for the user to pick from. "
-        "Use when the user wants to SEARCH, FIND, BROWSE, LOOK UP, or 'show me' music on Spotify "
-        "before deciding what to play. Does NOT auto-play. "
-        "Opens Spotify, types the query into search, waits for results, "
-        "takes a screenshot, and uses AI Vision to extract the visible result list. "
-        "Returns the search results with title and type (song/artist/album/playlist). "
-        "After calling this, the user can say 'play number X' to pick a result. "
-        "Do NOT call this when the user says 'play', 'listen to', 'put on' — use play_music for instant playback. "
-        "Examples: search_music(query='lofi'), search_music(query='bollywood hits'), "
-        "search_music(query='Ed Sheeran'), search_music(query='rock classics')"
+        "DEFAULT tool for ANY music request — search and browse Spotify without auto-playing. "
+        "Whether the user says 'play', 'search', 'find', 'browse', 'listen to', 'hear', "
+        "'show me', 'I want' — ALWAYS call this first for any music/song/playlist/artist/genre request. "
+        "Only use play_music instead when the user explicitly says 'just play' / 'skip browsing'. "
+        "Opens Spotify, searches, screenshots results, and extracts them via AI Vision. "
+        "Returns structured results (title + type) for user selection. "
+        "After calling this, the user picks a number and you call play_music_result. "
+        "Examples: search_music(query='lofi'), search_music(query='Ed Sheeran'), "
+        "search_music(query='bollywood hits'), search_music(query='study music')"
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "query": {
                 "type": "STRING",
-                "description": "The search query — genre, mood, artist, song, or playlist name. Examples: 'chill lofi', 'bollywood hits', 'Ed Sheeran'"
+                "description": "Search query — genre, mood, artist, song, or playlist name. Examples: 'chill lofi', 'bollywood hits', 'Ed Sheeran'"
             }
         },
         "required": ["query"]
