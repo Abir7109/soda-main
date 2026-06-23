@@ -50,7 +50,7 @@ def log(msg):
     except:
         pass
 
-BACKEND_URL = os.getenv("BACKEND_URL", "https://soda-backend-rdvz.onrender.com")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://soda-backend-sar2.onrender.com")
 AGENT_TOKEN = os.getenv("AGENT_TOKEN", "soda-local-agent-default")
 MACHINE_ID = os.getenv(
     "MACHINE_ID",
