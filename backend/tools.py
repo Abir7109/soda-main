@@ -547,23 +547,19 @@ welcome_home_tool = {
 play_music_tool = {
     "name": "play_music",
     "description": (
-        "Search and play music on Spotify. "
-        "Opens Spotify, searches for the requested song/artist/genre/mood, "
-        "and plays the top result. Automatically sets volume to 80% and "
-        "minimizes SODA to the background widget so you can use your desktop. "
+        "Search and play music on Spotify. Understand what the user wants and extract the search query "
+        "naturally from their words — ANY genre, artist, song, mood, vibe, or activity they describe. "
+        "Opens Spotify, searches for the requested content, and plays the top result. "
+        "Automatically sets volume to 80%. "
         "MANDATORY: Call this for ANY music or Spotify request. Do NOT refuse or apologize. "
+        "Call this when the user says they want to hear music — in ANY phrasing. "
+        "Extract the search query naturally from their full sentence. "
         "Do NOT call open_app for Spotify — call play_music directly. "
         "Do NOT use control_music for starting playback — use play_music. "
         "Do NOT use control_system for volume during playback — play_music sets volume automatically. "
-        "Triggers (all of these MUST call play_music): "
-        "'play [song/artist/genre/mood]', 'play [song] by [artist]', "
-        "'I want to listen to [X]', 'I wanna hear [X]', 'I'm feeling like [genre]', "
-        "'can you play [X]', 'could you play [X]', 'play me [X]', "
-        "'search for [X] on spotify', 'find [X] on spotify', "
-        "'open spotify', 'open spotify and [do X]', "
-        "'play some music', 'play something', 'search songs', 'find music', "
-        "'i need music', 'let's hear something', 'i'm in the mood for [genre]'. "
         "If query is empty or generic (e.g. 'some songs'), Spotify opens but you should ask what they'd like to hear. "
+        "When play_music returns {'success': True}, the music is already playing. "
+        "Do NOT call control_music or any other tool unless the user explicitly asks to pause/skip/stop AFTER playback started. "
         "Examples: play_music(query='chill lofi'), play_music(query='rock classics'), "
         "play_music(query='Shape of You by Ed Sheeran'), play_music(query='focus study music'), play_music(query='')"
     ),
@@ -572,7 +568,7 @@ play_music_tool = {
         "properties": {
             "query": {
                 "type": "STRING",
-                "description": "What to search for — genre, mood, artist, song, or playlist name. Can be empty to just open Spotify. Examples: 'chill lofi', 'rock classics', 'Shape of You by Ed Sheeran', 'focus study music', 'my liked songs', ''"
+                "description": "The search query extracted naturally from the user's request — genre, mood, artist, song, or playlist name. Can be empty to just open Spotify. Examples: 'chill lofi', 'rock classics', 'Shape of You by Ed Sheeran', 'focus study music', 'my liked songs', ''"
             }
         },
         "required": ["query"]
@@ -582,17 +578,16 @@ play_music_tool = {
 control_music_tool = {
     "name": "control_music",
     "description": (
-        "Control Spotify music playback globally using system media keys. "
-        "Works even when Spotify is minimized or in the background — "
-        "no window focus needed. "
-        "Actions: 'play_pause' (toggle play/pause), "
-        "'next' (skip to next track), 'previous' (go to previous track). "
-        "Call this for ALL of these: 'pause', 'pause the music', 'stop', 'stop the music', "
-        "'resume', 'play', 'play again', 'unpause', "
-        "'next song', 'next track', 'skip', 'skip this', 'change song', 'change track', "
-        "'previous song', 'previous track', 'go back', 'go to previous', "
-        "'next', 'previous'. "
+        "Control Spotify playback — pause, resume, skip tracks, go back. "
+        "Works even when Spotify is minimized or in the background, no window focus needed. "
+        "Understand the user's intent: 'pause' / 'stop music' → play_pause, "
+        "'next song' / 'skip' / 'change' → next, "
+        "'previous' / 'go back' → previous. "
+        "Any natural phrasing for playback control maps to this tool. "
+        "IMPORTANT: Only call this when the user explicitly asks to control playing music. "
+        "Do NOT call this after play_music returns success — the music is already playing. "
         "Do NOT call play_music for playback control — use this instead. "
+        "Actions: 'play_pause' (toggle), 'next' (skip forward), 'previous' (skip back). "
         "Examples: control_music(action='play_pause'), control_music(action='next'), "
         "control_music(action='previous')"
     ),
@@ -601,7 +596,7 @@ control_music_tool = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "'play_pause' to toggle, 'next' to skip forward, 'previous' to skip back"
+                "description": "'play_pause' to toggle play/pause, 'next' to skip forward, 'previous' to skip back"
             }
         },
         "required": ["action"]

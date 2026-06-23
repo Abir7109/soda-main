@@ -879,9 +879,21 @@ def _dispatch(tool, args):
     elif tool == "play_music":
         try:
             from spotify_bridge import play_music as _pm
+
+            def _emit_now_playing(payload):
+                try:
+                    sio.emit("status", {"message": "now_playing", "data": payload.get("data", {})})
+                except Exception:
+                    pass
+
             log(f"[Music] Calling spotify_bridge.play_music(query='{args.get('query', '')}')")
-            result = _pm(args.get("query", ""))
+            result = _pm(args.get("query", ""), emit_callback=_emit_now_playing)
             log(f"[Music] play_music result: {result}")
+            if result.get("success") and result.get("now_playing"):
+                try:
+                    sio.emit("now_playing", result["now_playing"])
+                except Exception:
+                    pass
             return result
         except Exception as e:
             log(f"[Music] play_music failed: {e}")

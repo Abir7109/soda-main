@@ -85,6 +85,40 @@ def _activate_window(hwnd):
     time.sleep(0.3)
 
 
+def _within_spotify_bounds(x, y):
+    """Check if (x,y) falls within the Spotify window (with a 50px margin).
+    Returns True if we can safely click there. Prevents random desktop clicking."""
+    rect = _get_spotify_rect()
+    if not rect:
+        return False
+    left, top, right, bottom = rect
+    margin = 50
+    return (left + margin <= x <= right - margin and
+            top + margin <= y <= bottom - margin)
+
+
+def _click_play_area():
+    """Click the approximate position of the big green play button on Spotify.
+    The button is typically in the top-left content area: ~20% from left, ~22% from top.
+    Only clicks if coordinates are within Spotify window bounds. Returns True if playback detected."""
+    rect = _get_spotify_rect()
+    if not rect:
+        return False
+    left, top, right, bottom = rect
+    cx = left + int((right - left) * 0.20)
+    cy = top + int((bottom - top) * 0.22)
+    if not _within_spotify_bounds(cx, cy):
+        log.warning(f"[Spotify] Play area click ({cx},{cy}) outside bounds — skipping")
+        return False
+    log.info(f"[Spotify] Clicking play area ({cx},{cy})")
+    pyautogui.click(cx, cy)
+    time.sleep(1.0)
+    if _wait_for_playback(timeout=5.0):
+        log.info(f"[Spotify] Playback confirmed via area click ({cx},{cy})")
+        return True
+    return False
+
+
 def _focus_or_open_spotify():
     found = _find_spotify_window()
     if found:
@@ -178,6 +212,9 @@ async def _click_big_play_ai_vision():
             # Scale from resized-image coords → original window coords → absolute screen
             x = int(left + img_x * w / max(rw, 1))
             y = int(top + img_y * h / max(rh, 1))
+            if not _within_spotify_bounds(x, y):
+                log.warning(f"[Spotify] AI Vision click ({x},{y}) outside Spotify bounds — skipping")
+                return False
             log.info(f"[Spotify] AI Vision big play -> click ({x}, {y}) (orig img {img_x},{img_y} scaled from {rw}x{rh} to {w}x{h})")
             pyautogui.click(x, y)
             time.sleep(1.5)
@@ -187,11 +224,12 @@ async def _click_big_play_ai_vision():
                 log.info("[Spotify] Playback confirmed via window title")
                 return True
             log.info("[Spotify] Click didn't start playback, retrying click...")
-            pyautogui.click(x, y)
-            time.sleep(1.5)
-            if _wait_for_playback(timeout=5.0):
-                log.info("[Spotify] Playback confirmed on retry")
-                return True
+            if _within_spotify_bounds(x, y):
+                pyautogui.click(x, y)
+                time.sleep(1.5)
+                if _wait_for_playback(timeout=5.0):
+                    log.info("[Spotify] Playback confirmed on retry")
+                    return True
             log.info("[Spotify] Retry click failed, trying template match...")
             if _click_big_play_template():
                 if _wait_for_playback(timeout=6.0):
@@ -281,9 +319,9 @@ def _wait_for_playback(timeout=8.0):
 
 
 def _keyboard_play():
-    """Navigate to the big play button via Tab, then Enter. Falls back to area click and Space."""
-    log.info("[Spotify] Keyboard play attempt")
-    # Method 1: Tab through UI to reach play button
+    """Navigate to big play via Tab→Enter. Falls back to Space and Ctrl+Shift+Down.
+    Used as final fallback after simpler area-click and AI Vision methods."""
+    log.info("[Spotify] Keyboard play attempt (Tab→Enter)")
     for i in range(6):
         pyautogui.press("tab")
         time.sleep(0.15)
@@ -292,25 +330,13 @@ def _keyboard_play():
     if _wait_for_playback(timeout=5.0):
         log.info("[Spotify] Playback confirmed via Tab→Enter")
         return True
-    # Method 2: Try clicking approximate big play button area (top-left of content region)
-    rect = _get_spotify_rect()
-    if rect:
-        left, top, right, bottom = rect
-        cx = left + int((right - left) * 0.20)
-        cy = top + int((bottom - top) * 0.20)
-        log.info(f"[Spotify] Clicking play area ({cx},{cy})")
-        pyautogui.click(cx, cy)
-        time.sleep(1.0)
-        if _wait_for_playback(timeout=5.0):
-            log.info(f"[Spotify] Playback confirmed via area click ({cx},{cy})")
-            return True
-    # Method 3: Space key (play/pause toggle on focused track)
+    # Space key (play/pause toggle on focused track)
     pyautogui.press("space")
     time.sleep(0.8)
     if _wait_for_playback(timeout=5.0):
         log.info("[Spotify] Playback confirmed via Space")
         return True
-    # Method 4: Ctrl+Shift+Down (Spotify native play shortcut)
+    # Ctrl+Shift+Down (Spotify native play shortcut)
     pyautogui.hotkey("ctrl", "shift", "down")
     time.sleep(1.0)
     if _wait_for_playback(timeout=5.0):
@@ -410,8 +436,22 @@ def _do_search(search_text):
     time.sleep(0.5)
 
 
-def play_music(query):
-    """Search music, open top result, click big play button (single-shot, no retry loops)."""
+def _get_now_playing():
+    """Parse 'Song - Artist' from Spotify window title. Returns dict or None."""
+    title = _get_window_title()
+    if not title or title in ("Spotify", "Advertisement") or title.lower().endswith(" - spotify"):
+        return None
+    if " - " in title and len(title) > 10:
+        parts = title.split(" - ", 1)
+        return {"track": parts[0].strip(), "artist": parts[1].strip()}
+    return None
+
+
+def play_music(query, emit_callback=None):
+    """Search music, open top result, click big play button.
+    Method priority: 1. area click (fast) 2. keyboard (reliable) 3. AI Vision (last resort).
+    Returns {'success': True, 'query': query, 'now_playing': {...}} on success.
+    """
     if not _PYAUTOGUI:
         return {"success": False, "error": "PyAutoGUI not installed"}
     if not _WIN32:
@@ -424,6 +464,8 @@ def play_music(query):
         if not search_text or search_text.strip() == '':
             _focus_or_open_spotify()
             _maximize_soda()
+            if emit_callback:
+                emit_callback({"event": "status", "message": "Spotify opened. What would you like to listen to?"})
             return {"success": True, "query": query, "note": "Spotify opened. What would you like to listen to?"}
 
         if not _focus_or_open_spotify():
@@ -431,21 +473,50 @@ def play_music(query):
 
         _do_search(search_text)
 
+        # Pre-playback check: many Spotify pages auto-play after search
+        if _is_playing():
+            now_playing = _get_now_playing()
+            record_play(query, _get_window_title())
+            log.info(f"[Spotify] Already playing after search ({now_playing})")
+            _maximize_soda()
+            if emit_callback:
+                emit_callback({"event": "now_playing", "data": now_playing or {"query": query}})
+            return {"success": True, "query": query, "now_playing": now_playing}
+
+        # Method 1: Simple area click (fast, no dependencies)
+        if _click_play_area():
+            now_playing = _get_now_playing()
+            record_play(query, _get_window_title())
+            log.info(f"[Spotify] Playback via area click")
+            _maximize_soda()
+            if emit_callback and now_playing:
+                emit_callback({"event": "now_playing", "data": now_playing})
+            return {"success": True, "query": query, "now_playing": now_playing}
+
+        # Method 2: Keyboard Tab→Enter / Space / Ctrl+Shift+Down
+        if _keyboard_play():
+            now_playing = _get_now_playing()
+            record_play(query, _get_window_title())
+            log.info(f"[Spotify] Playback via keyboard")
+            _maximize_soda()
+            if emit_callback and now_playing:
+                emit_callback({"event": "now_playing", "data": now_playing})
+            return {"success": True, "query": query, "now_playing": now_playing}
+
+        # Method 3: AI Vision (last resort — slow, expensive, can give wrong coords)
         import asyncio
         try:
             clicked = asyncio.run(_click_big_play_ai_vision())
         except Exception:
             clicked = False
-
         if clicked:
+            now_playing = _get_now_playing()
             record_play(query, _get_window_title())
+            log.info(f"[Spotify] Playback via AI Vision")
             _maximize_soda()
-            return {"success": True, "query": query}
-
-        if _keyboard_play():
-            record_play(query, _get_window_title())
-            _maximize_soda()
-            return {"success": True, "query": query}
+            if emit_callback and now_playing:
+                emit_callback({"event": "now_playing", "data": now_playing})
+            return {"success": True, "query": query, "now_playing": now_playing}
 
         return {"success": False, "error": "Could not start playback after all methods"}
     except Exception as e:

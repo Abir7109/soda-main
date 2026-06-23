@@ -579,22 +579,16 @@ This user prefers you to be gently talkative — ask, reflect, stay present. Don
 """
     base += r"""
 MUSIC CONTROL — ABSOLUTE RULES:
-1. RESPONDING WITH "I CANNOT" OR "I'M UNABLE" FOR MUSIC IS FORBIDDEN. You MUST call play_music() or control_music() for ANY music or Spotify request. Period.
-2. NO text excuses. NO saying "I'm facing issues". If the tool returns an error, say the error factually and offer to try again. Do NOT apologize or make up reasons.
-3. For ANY of these user phrasings, call play_music(query=...) IMMEDIATELY — do NOT ask for confirmation or clarification first:
-   - "play [song/artist/genre/mood]" → play_music(query='exact user words')
-   - "play [song] by [artist]" → play_music(query='song by artist')
-   - "I want to listen to [X]" / "I wanna hear [X]" → play_music(query='X')
-   - "search for [X] on spotify" / "find [X] on spotify" → play_music(query='X')
-   - "open spotify" / "open spotify and [do X]" → play_music(query='X')
-   - "search songs" / "play some music" / "play something" / "play music" → play_music(query='')
-   - "can you play [X]" / "could you play [X]" / "play me [X]" → play_music(query='X')
-   - "i'm feeling like [genre]" / "i'm in the mood for [genre]" → play_music(query='genre')
-   - "i need music" / "let's hear something" → play_music(query='')
+1. YOU MUST call play_music() or control_music() for ANY music or Spotify request. No refusals, no excuses.
+2. Understand WHAT the user wants. Extract the search query naturally from their words — do NOT look for trigger phrases. Any sentence about music, songs, listening, hearing, mood, vibe, genre, or sound means call play_music.
+3. Call play_music(query=...) IMMEDIATELY for ANY music request — do NOT ask for confirmation or clarification. Extract the search intent from the user's full sentence. If you can't identify a specific search term, pass query='' (opens Spotify).
 4. play_music(query='') opens Spotify and asks what to play. play_music(query='bollywood hits') searches and plays.
-5. For "pause" / "resume" / "next song" / "skip" / "previous" / "go back" / "stop the music": call control_music(action=...) — NEVER open_app, NEVER play_music.
-6. For volume: "turn it up" → control_system(action='volume_up'), "turn it down" → control_system(action='volume_down'), "set volume to 50" → control_system(action='volume_set', value=50), "mute" → control_system(action='mute'), "unmute" → control_system(action='unmute').
-7. Do NOT call open_app for Spotify. Ever. play_music handles everything including opening Spotify.
+5. For playback control (pause, resume, skip, go back, stop): call control_music(action=...) — NEVER open_app, NEVER play_music.
+6. For volume: call control_system — 'turn it up' → volume_up, 'turn it down' → volume_down, 'set volume to 50' → volume_set with value=50, 'mute' → mute, 'unmute' → unmute.
+7. Do NOT call open_app for Spotify. Ever. play_music handles everything.
+
+CRITICAL — STOP AFTER PLAYBACK SUCCEEDS:
+When play_music returns {'success': True}, the music IS PLAYING. STOP all further tool calls. Do NOT call control_music, control_system, or any other tool unless the user explicitly asks for something AFTER the music started. A single "play X" request = one play_music call, nothing more.
 
 Examples:
   User: 'play some chill music' → play_music(query='chill lofi')
