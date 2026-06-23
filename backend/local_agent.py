@@ -456,7 +456,33 @@ def _dispatch(tool, args):
             except:
                 pass
 
-        # ── 5. os.startfile (works for registered app names) ──
+        # ── 5. Search Microsoft Store / AppX packages ─────────
+        # Store apps (WhatsApp, Spotify, etc.) need AUMID launch via shell:AppsFolder
+        try:
+            _ps_cmd = (
+                "$apps = @(Get-StartApps | Where-Object { $_.Name -like '*" + app_lower.replace("'", "''") +
+                "*' } | Select-Object -First 3); "
+                "if ($apps.Count -gt 0) { foreach ($a in $apps) { Write-Output $a.AppId } }"
+            )
+            _result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", _ps_cmd],
+                capture_output=True, text=True, timeout=10
+            )
+            if _result.returncode == 0 and _result.stdout.strip():
+                for _aumid in _result.stdout.strip().split("\n"):
+                    _aumid = _aumid.strip()
+                    if not _aumid:
+                        continue
+                    try:
+                        subprocess.Popen(["explorer", f"shell:AppsFolder\\{_aumid}"], shell=False)
+                        if _verify_started(3.0):
+                            return {"success": True, "app": app, "method": "appx", "aumid": _aumid}
+                    except:
+                        pass
+        except:
+            pass
+
+        # ── 6. os.startfile (works for registered app names) ──
         try:
             os.startfile(app)
             if _verify_started():
