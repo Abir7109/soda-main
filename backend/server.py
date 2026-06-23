@@ -224,6 +224,17 @@ async def agent_register(sid, data):
     machine_id = data.get('machine_id', sid)
     platform = data.get('platform', 'unknown')
     tools = data.get('tools', [])
+    # Remove stale agent entries with the same machine_id BUT fewer tools (zombie detection)
+    for old_sid in list(_connected_agents.keys()):
+        if old_sid == sid:
+            continue
+        if _connected_agents[old_sid].get('machine_id') == machine_id:
+            old_tools = len(_connected_agents[old_sid].get('tools', []))
+            new_tools = len(tools)
+            if new_tools >= old_tools:
+                stale = _connected_agents.pop(old_sid, None)
+                if stale:
+                    print(f"[AGENT] Replaced stale agent: {machine_id} ({old_tools}→{new_tools} tools, old SID: {old_sid})")
     _connected_agents[sid] = {
         'machine_id': machine_id,
         'platform': platform,

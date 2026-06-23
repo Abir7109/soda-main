@@ -1468,7 +1468,11 @@ class AudioLoop:
             callback_id = str(_uuid.uuid4())
             future = asyncio.Future()
             _pending_agent_results[callback_id] = future
-            agent_sid = next(iter(_connected_agents))
+            # Pick the agent with the most tools (newest version wins over zombies)
+            agent_sid = max(
+                _connected_agents,
+                key=lambda s: len(_connected_agents[s].get('tools', []))
+            )
             await self.sio.emit('agent_execute', {
                 'callback_id': callback_id,
                 'tool': name,
