@@ -390,6 +390,43 @@ def _dispatch(tool, args):
         except:
             pass
 
+        # ── FINAL FALLBACK: Start Menu search ────────────────────
+        # Win key → type app name → Enter (same as clicking Start and searching)
+        if HAS_PYAUTOGUI:
+            import pyautogui
+            try:
+                # Open Start Menu
+                pyautogui.press("win")
+                time.sleep(0.8)
+
+                # Type app name
+                pyautogui.write(app, interval=0.05)
+                time.sleep(1.5)
+
+                # Press Enter to open top result
+                pyautogui.press("enter")
+                time.sleep(2)
+
+                # Verify - check if a new non-trivial window appeared
+                if HAS_PYGETWINDOW:
+                    import pygetwindow as gw
+                    try:
+                        all_before = set(w.title for w in gw.getAllWindows() if w.title.strip())
+                    except:
+                        all_before = set()
+                    time.sleep(1)
+                    try:
+                        all_after = set(w.title for w in gw.getAllWindows() if w.title.strip())
+                    except:
+                        all_after = set()
+                    new_wins = all_after - all_before
+                    if new_wins or len(all_after) > len(all_before):
+                        return {"success": True, "app": app, "method": "start_menu"}
+
+                return {"success": True, "app": app, "method": "start_menu", "note": "Used Start Menu search"}
+            except Exception as e:
+                return {"success": False, "error": f"Could not open '{app}' even via Start Menu: {e}"}
+
         return {"success": False, "error": f"Could not find or open '{app}'. Try a different name."}
 
     elif tool == "close_window":
