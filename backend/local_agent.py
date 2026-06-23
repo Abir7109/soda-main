@@ -329,10 +329,37 @@ def _dispatch(tool, args):
             return {"success": False, "error": "No app name provided"}
         app_lower = app.lower().strip()
 
-        # Hardcoded lookup for common apps
+        def _verify_started(timeout=2.0):
+            """Check if a new window appeared within timeout."""
+            if not HAS_PYGETWINDOW:
+                return True
+            import pygetwindow as gw
+            try:
+                before = set(w.title.strip() for w in gw.getAllWindows() if w.title.strip() and len(w.title.strip()) > 2)
+            except:
+                before = set()
+            time.sleep(timeout)
+            try:
+                after = set(w.title.strip() for w in gw.getAllWindows() if w.title.strip() and len(w.title.strip()) > 2)
+            except:
+                after = set()
+            return bool(after - before)
+
+        def _launch(path_or_name):
+            """Launch an executable or shortcut, return True if window appeared."""
+            try:
+                subprocess.Popen([path_or_name], shell=False)
+                return _verify_started()
+            except:
+                try:
+                    subprocess.Popen(["start", "", path_or_name], shell=True)
+                    return _verify_started()
+                except:
+                    return False
+
+        # ── 1. KNOWN_APPS (preset common apps) ────────────────
         KNOWN_APPS = {
-            "chrome": ["chrome.exe", r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                       r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"],
+            "chrome": ["chrome.exe", r"C:\Program Files\Google\Chrome\Application\chrome.exe"],
             "firefox": ["firefox.exe", r"C:\Program Files\Mozilla Firefox\firefox.exe"],
             "edge": ["msedge.exe", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"],
             "notepad": ["notepad.exe"],
@@ -345,12 +372,12 @@ def _dispatch(tool, args):
             "this pc": ["explorer.exe"],
             "calculator": ["calc.exe"],
             "paint": ["mspaint.exe"],
-            "word": ["winword.exe", r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"],
-            "excel": ["excel.exe", r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE"],
+            "word": ["winword.exe"],
+            "excel": ["excel.exe"],
             "outlook": ["outlook.exe"],
             "vscode": ["code.exe"],
             "visual studio code": ["code.exe"],
-            "whatsapp": ["WhatsApp.exe", os.path.expandvars(r"%LOCALAPPDATA%\WhatsApp\WhatsApp.exe")],
+            "whatsapp": ["WhatsApp.exe"],
             "spotify": ["Spotify.exe"],
             "discord": ["Discord.exe"],
             "slack": ["slack.exe"],
@@ -360,118 +387,107 @@ def _dispatch(tool, args):
         }
 
         if app_lower in KNOWN_APPS:
-            candidates = KNOWN_APPS[app_lower]
-            # First try exe name via start command
-            exe_name = candidates[0]
-            # Try full path first
-            for path in candidates:
-                if os.path.isfile(path):
-                    try:
-                        subprocess.Popen([path], shell=False)
-                        return {"success": True, "app": app, "path": path}
-                    except:
-                        pass
-            # Try just the executable name
+            for c in KNOWN_APPS[app_lower]:
+                if _launch(c):
+                    return {"success": True, "app": app, "path": c, "method": "known"}
+            # Try via `start` command as last KNOWN_APPS resort
             try:
-                subprocess.Popen(["start", "", exe_name], shell=True)
-                return {"success": True, "app": app, "method": "start"}
+                subprocess.Popen(["start", "", KNOWN_APPS[app_lower][0]], shell=True)
+                if _verify_started():
+                    return {"success": True, "app": app, "method": "known_start"}
             except:
                 pass
 
-        # Try os.startfile (works for registered apps)
+        # ── 2. Search Windows App Paths registry ──────────────
+        # This is how `start` and the Run dialog find apps
+        try:
+            import winreg
+            _app_paths = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"
+            for _root_key in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    _key = winreg.OpenKey(_root_key, _app_paths)
+                    _count = winreg.QueryInfoKey(_key)[0]
+                    for _i in range(_count):
+                        _subkey_name = winreg.EnumKey(_key, _i)
+                        if app_lower in _subkey_name.lower().replace(".exe", ""):
+                            _subkey = winreg.OpenKey(_key, _subkey_name)
+                            try:
+                                _exe_path = winreg.QueryValue(_subkey, "")
+                                winreg.CloseKey(_subkey)
+                                if _exe_path and os.path.isfile(_exe_path):
+                                    if _launch(_exe_path):
+                                        return {"success": True, "app": app, "path": _exe_path, "method": "registry"}
+                            except:
+                                winreg.CloseKey(_subkey)
+                    winreg.CloseKey(_key)
+                except:
+                    pass
+        except:
+            pass
+
+        # ── 3. Search PATH via where command ──────────────────
+        for _ext in ("", ".exe", ".cmd", ".bat"):
+            try:
+                _result = subprocess.run(["where", f"{app}{_ext}"], shell=True, capture_output=True, text=True, timeout=5)
+                if _result.returncode == 0:
+                    _exe_path = _result.stdout.strip().split("\n")[0].strip()
+                    if _launch(_exe_path):
+                        return {"success": True, "app": app, "path": _exe_path, "method": "where"}
+            except:
+                pass
+
+        # ── 4. Search Start Menu shortcuts on disk ────────────
+        for _sm_env in ("APPDATA", "PROGRAMDATA"):
+            _sm_base = os.path.expandvars(f"%{_sm_env}%\\Microsoft\\Windows\\Start Menu\\Programs")
+            if not os.path.isdir(_sm_base):
+                continue
+            try:
+                for _root, _dirs, _files in os.walk(_sm_base):
+                    for _f in _files:
+                        if not _f.lower().endswith(".lnk"):
+                            continue
+                        _name_no_ext = _f.lower().replace(".lnk", "")
+                        if app_lower in _name_no_ext or _name_no_ext in app_lower:
+                            _shortcut_path = os.path.join(_root, _f)
+                            if _launch(_shortcut_path):
+                                return {"success": True, "app": app, "path": _shortcut_path, "method": "start_menu"}
+            except:
+                pass
+
+        # ── 5. os.startfile (works for registered app names) ──
         try:
             os.startfile(app)
-            return {"success": True, "app": app, "method": "startfile"}
+            if _verify_started():
+                return {"success": True, "app": app, "method": "startfile"}
         except:
             pass
 
-        # Try `start` command
+        # ── 6. `start` shell command ──────────────────────────
         try:
             subprocess.Popen(["start", "", app], shell=True)
-            return {"success": True, "app": app, "method": "start"}
+            if _verify_started():
+                return {"success": True, "app": app, "method": "start_cmd"}
         except:
             pass
 
-        # Search PATH for the executable
-        try:
-            result = subprocess.run(["where", app], shell=True, capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                exe_path = result.stdout.strip().split("\n")[0].strip()
-                subprocess.Popen([exe_path], shell=False)
-                return {"success": True, "app": app, "path": exe_path}
-        except:
-            pass
-
-        # Try with .exe extension
-        try:
-            result = subprocess.run(["where", f"{app}.exe"], shell=True, capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                exe_path = result.stdout.strip().split("\n")[0].strip()
-                subprocess.Popen([exe_path], shell=False)
-                return {"success": True, "app": app, "path": exe_path}
-        except:
-            pass
-
-        # ── Search Start Menu shortcuts on disk ────────────────
-        # Every installed app has a .lnk in the Start Menu folders
-        try:
-            _start_menu_dirs = [
-                os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
-                os.path.expandvars(r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs"),
-            ]
-            for _sm_dir in _start_menu_dirs:
-                if not os.path.isdir(_sm_dir):
-                    continue
-                for _root, _dirs, _files in os.walk(_sm_dir):
-                    for _f in _files:
-                        if _f.lower().endswith(".lnk") and app_lower in _f.lower().replace(".lnk", ""):
-                            _shortcut_path = os.path.join(_root, _f)
-                            try:
-                                os.startfile(_shortcut_path)
-                                return {"success": True, "app": app, "method": "start_menu_shortcut", "path": _shortcut_path}
-                            except:
-                                continue
-        except:
-            pass
-
-        # ── FINAL FALLBACK: PyAutoGUI Start Menu search ────────
-        # Win key → type app name → Enter (same as clicking Start and searching)
+        # ── 7. FINAL FALLBACK: PyAutoGUI Start Menu search ────
         if HAS_PYAUTOGUI:
             import pyautogui
             try:
-                # Open Start Menu
                 pyautogui.press("win")
                 time.sleep(0.8)
-
-                # Type app name
                 pyautogui.write(app, interval=0.05)
                 time.sleep(1.5)
-
-                # Press Enter to open top result
                 pyautogui.press("enter")
                 time.sleep(2)
-
-                # Verify - check if a new non-trivial window appeared
-                if HAS_PYGETWINDOW:
-                    import pygetwindow as gw
-                    try:
-                        all_before = set(w.title for w in gw.getAllWindows() if w.title.strip())
-                    except:
-                        all_before = set()
-                    time.sleep(1)
-                    try:
-                        all_after = set(w.title for w in gw.getAllWindows() if w.title.strip())
-                    except:
-                        all_after = set()
-                    new_wins = all_after - all_before
-                    if new_wins or len(all_after) > len(all_before):
-                        return {"success": True, "app": app, "method": "start_menu"}
-
-                return {"success": True, "app": app, "method": "start_menu", "note": "Used Start Menu search"}
+                if _verify_started(1.5):
+                    return {"success": True, "app": app, "method": "pyautogui_start"}
+                return {"success": False, "error": f"PyAutoGUI Start Menu search did not open '{app}'", "not_found": True}
             except Exception as e:
-                return {"success": False, "error": f"Could not open '{app}' even via Start Menu: {e}"}
+                return {"success": False, "error": f"PyAutoGUI failed: {e}"}
 
-        return {"success": False, "error": f"Could not find or open '{app}'. Try a different name."}
+        # ── All methods exhausted ─────────────────────────────
+        return {"success": False, "error": f"Could not find '{app}' installed on this system. Try searching the web for it.", "not_found": True}
 
     elif tool == "close_window":
         name = args.get("name", "") or args.get("window_name", "") or args.get("title", "")
