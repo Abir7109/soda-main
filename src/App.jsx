@@ -1262,6 +1262,11 @@ export default function App() {
 
     socket.connect()
 
+    // Handle already-connected edge case (e.g., StrictMode double-mount in dev)
+    if (socket.connected) {
+      onConnect()
+    }
+
     return () => {
       window.removeEventListener('soda:tool-resolved', handleResolve)
       socket.off('connect', onConnect)
