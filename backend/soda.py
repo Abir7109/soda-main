@@ -1326,12 +1326,11 @@ class AudioLoop:
 
                             tasks.append(self._dispatch_tool(fc))
 
-                        # Mute mic during tool dispatch — prevents user audio from leaking to
-                        # Gemini while the model is processing tool results
+                        # Model's speech continues uninterrupted during tool dispatch.
+                        # _model_is_speaking keeps mic muted; _tools_running prevents
+                        # play_audio() from clearing the speaking flag prematurely.
                         if tasks:
-                            self._model_is_speaking = True
                             self._tools_running = True
-                            self._clear_queues()
 
                         if tasks:
                             raw = await asyncio.gather(*tasks, return_exceptions=True)

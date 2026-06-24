@@ -79,17 +79,35 @@ def _launch_spotify():
 
 def _activate_window(hwnd):
     """Bring Spotify window to foreground by clicking its title bar.
-    No Alt-key bypass — that triggers Spotify's menu bar and breaks Ctrl+K."""
+    First brings it to top of Z-order with SwitchToThisWindow so the
+    title-bar click lands on Spotify, not the overlapping SODA window."""
     if win32gui.GetForegroundWindow() == hwnd:
         return True
     if win32gui.IsIconic(hwnd):
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         safe_sleep(0.3)
+
+    # Bring to top of Z-order first — without this, the title-bar click
+    # lands on whatever window is covering Spotify (e.g., SODA)
+    try:
+        ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+        safe_sleep(0.3)
+    except Exception:
+        pass
+
     rect = win32gui.GetWindowRect(hwnd)
     if not rect:
         return False
     cx = (rect[0] + rect[2]) // 2
     cy = rect[1] + 10
+
+    # Verify the click will actually land on Spotify before clicking
+    point_hwnd = win32gui.WindowFromPoint((cx, cy))
+    if point_hwnd != hwnd and not win32gui.IsChild(hwnd, point_hwnd):
+        # Some window is still covering Spotify — retry SwitchToThisWindow
+        ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+        safe_sleep(0.3)
+
     pyautogui.click(cx, cy)
     safe_sleep(0.5)
     return win32gui.GetForegroundWindow() == hwnd
@@ -170,8 +188,24 @@ def _focus_or_open_spotify():
     found = _find_spotify_window()
     if found:
         hwnd, _ = found
-        _activate_window(hwnd)
-        return True
+        if _activate_window(hwnd):
+            return True
+        log.warning("[Spotify] Window found but could not be activated — retrying")
+        # Second attempt with force restore
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            safe_sleep(0.3)
+        ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+        safe_sleep(0.3)
+        rect = win32gui.GetWindowRect(hwnd)
+        if rect:
+            cx = (rect[0] + rect[2]) // 2
+            pyautogui.click(cx, rect[1] + 10)
+            safe_sleep(0.5)
+        if win32gui.GetForegroundWindow() == hwnd:
+            return True
+        log.warning("[Spotify] Could not activate window at all")
+        return False
     if not _launch_spotify():
         try:
             from system_app import open_app
@@ -183,8 +217,7 @@ def _focus_or_open_spotify():
     if not found:
         log.warning("[Spotify] Window not found after launch")
         return False
-    _activate_window(found[0])
-    return True
+    return _activate_window(found[0])
 
 
 # ── Spotify Window Bounds ──
@@ -436,9 +469,6 @@ def _maximize_soda():
             safe_sleep(0.15)
         finally:
             ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
-        safe_sleep(0.1)
-        # Escape dismisses any menu triggered by the Alt keypress
-        pyautogui.press("escape")
         safe_sleep(0.1)
         if win32gui.GetForegroundWindow() == hwnd:
             return True
