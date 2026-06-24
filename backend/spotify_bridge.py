@@ -531,47 +531,57 @@ def search_music(query):
             return {"success": False, "error": "Could not get Spotify window region"}
 
         import mss
+        from PIL import Image
         with mss.mss() as sct:
             shot = sct.grab(region)
-            png_bytes = mss.tools.to_png(shot.rgb, shot.size)
+            img = Image.frombytes("RGB", shot.size, shot.rgb)
 
-        import asyncio
-        from screen_vision import analyze_screen
-
-        async def _get_results():
-            prompt = (
-                "This is a screenshot of Spotify search results for the query: " + query + ". "
-                "List ALL visible search results in order from top to bottom. "
-                "For each result, identify the TITLE and TYPE (song/artist/album/playlist/podcast). "
-                "Format your response as a JSON array with NO extra text:\n"
-                '[{"index": 1, "title": "...", "type": "song"}, ...]'
-            )
-            return await analyze_screen(prompt=prompt, screenshot=png_bytes)
-
+        results = []
         try:
-            vision = asyncio.run(_get_results())
-        except Exception:
-            vision = {"success": False, "error": "AI Vision call failed"}
+            import pytesseract
+            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+            rows = {}
+            for i in range(len(data["text"])):
+                txt = data["text"][i].strip()
+                if not txt or int(data["conf"][i]) < 30:
+                    continue
+                y = data["top"][i]
+                row_key = round(y / 20) * 20
+                rows.setdefault(row_key, []).append({
+                    "text": txt,
+                    "x": data["left"][i],
+                    "y": y,
+                })
 
-        if not vision.get("success"):
-            return {"success": False, "error": vision.get("error", "AI Vision failed")}
+            skip_keywords = {"top result", "songs", "artists", "albums", "playlists", "podcasts", "genres", "profiles"}
+            for row_key in sorted(rows):
+                words = rows[row_key]
+                words.sort(key=lambda w: w["x"])
+                line = " ".join(w["text"] for w in words).strip()
+                if not line or len(line) < 2:
+                    continue
+                if line.lower() in skip_keywords:
+                    continue
 
-        text = vision.get("analysis", "").strip()
-        import json
-        try:
-            results = json.loads(text)
-        except json.JSONDecodeError:
-            match = re.search(r'\[.*?\]', text, re.DOTALL)
-            if match:
-                try:
-                    results = json.loads(match.group())
-                except (json.JSONDecodeError, Exception):
-                    return {"success": True, "_raw": text, "results": []}
-            else:
-                return {"success": True, "_raw": text, "results": []}
+                title = line
+                result_type = "result"
+                lower = line.lower()
+                if any(k in lower for k in ("song", "single")):
+                    result_type = "song"
+                elif any(k in lower for k in ("artist", "artists")):
+                    result_type = "artist"
+                elif any(k in lower for k in ("album", "ep")):
+                    result_type = "album"
+                elif any(k in lower for k in ("playlist", "radio")):
+                    result_type = "playlist"
+                elif any(k in lower for k in ("podcast", "episode", "show")):
+                    result_type = "podcast"
 
-        if not isinstance(results, list):
-            return {"success": True, "_raw": text, "results": []}
+                results.append({"index": len(results) + 1, "title": title, "type": result_type})
+        except ImportError:
+            log.info("[Spotify] pytesseract not available — returning empty results")
+        except Exception as e:
+            log.warning(f"[Spotify] OCR failed: {e}")
 
         _maximize_soda()
         return {
