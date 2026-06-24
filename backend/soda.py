@@ -1366,8 +1366,14 @@ class AudioLoop:
                                 )
                             except Exception as e:
                                 log.error(f"Error sending tool response: {e}")
+                                self._model_is_speaking = False
+                                self._tools_running = False
                                 break
                             # Reset speaking flag immediately — don't wait for play_audio silence timeout
+                            self._model_is_speaking = False
+                            self._tools_running = False
+                        else:
+                            # All tool calls failed — reset flags so mic unmutes for normal chat
                             self._model_is_speaking = False
                             self._tools_running = False
 
@@ -1559,11 +1565,11 @@ class AudioLoop:
                 'args': args,
             }, room=agent_sid)
             try:
-                result = await asyncio.wait_for(future, timeout=30.0)
+                result = await asyncio.wait_for(future, timeout=10.0)
                 _success = result.pop('_success', True)
                 log.info(f"[AGENT] {name} result: success={_success}")
             except asyncio.TimeoutError:
-                result = {"success": False, "error": "Local agent did not respond within 30s"}
+                result = {"success": False, "error": "Local agent did not respond within 10s"}
                 _success = False
                 log.warning(f"[AGENT] {name} TIMEOUT — agent {agent_info.get('machine_id', agent_sid)} did not respond in 30s")
             finally:

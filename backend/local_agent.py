@@ -1600,13 +1600,18 @@ def _start_abort_monitor():
 
 
 def _heartbeat_loop():
-    """Print a heartbeat every 30 seconds so user knows agent is alive."""
+    """Print a heartbeat every 30 seconds so user knows agent is alive.
+    Also sends agent_pong so the server can detect stale agents."""
     while True:
         time.sleep(30)
         if sio.connected:
-            log(f"[LocalAgent] ⚡ Alive — connected to {BACKEND_URL} | {len(LOCAL_TOOLS)} tools loaded")
+            try:
+                sio.emit('agent_pong', {'ts': time.time()})
+            except Exception:
+                pass
+            log(f"[LocalAgent] Alive — connected to {BACKEND_URL} | {len(LOCAL_TOOLS)} tools loaded")
         else:
-            log(f"[LocalAgent] ❌ Disconnected — will auto-reconnect...")
+            log(f"[LocalAgent] Disconnected — will auto-reconnect...")
 
 
 if __name__ == "__main__":
