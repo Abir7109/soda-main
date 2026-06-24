@@ -441,14 +441,14 @@ def _keyboard_play():
 
 
 def _maximize_soda():
-    """Force SODA main window to foreground using Alt-key UIPI bypass.
-    Tries multiple title patterns and fallback techniques.
+    """Force SODA main window to foreground WITHOUT Alt-key (avoids Spotify menu trigger).
+    Uses SwitchToThisWindow as primary method.
     """
     if not _WIN32:
         return False
 
     def _bring_to_foreground(hwnd):
-        """Try all foreground methods on one window handle."""
+        """Try all foreground methods on one window handle. No Alt-key."""
         try:
             rect = win32gui.GetWindowRect(hwnd)
             w = rect[2] - rect[0]
@@ -461,19 +461,7 @@ def _maximize_soda():
         except Exception:
             return False
 
-        # Method 1: Alt-key UIPI bypass + SetForegroundWindow
-        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-        try:
-            safe_sleep(0.1)
-            win32gui.SetForegroundWindow(hwnd)
-            safe_sleep(0.15)
-        finally:
-            ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
-        safe_sleep(0.1)
-        if win32gui.GetForegroundWindow() == hwnd:
-            return True
-
-        # Method 2: SwitchToThisWindow (bypasses UIPI on most Windows versions)
+        # Method 1: SwitchToThisWindow (bypasses UIPI, no side effects)
         try:
             ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
             safe_sleep(0.15)
@@ -482,13 +470,24 @@ def _maximize_soda():
         except Exception:
             pass
 
-        # Method 3: BringWindowToTop + SetForegroundWindow
+        # Method 2: BringWindowToTop + SetForegroundWindow
         try:
             win32gui.BringWindowToTop(hwnd)
             win32gui.SetForegroundWindow(hwnd)
             safe_sleep(0.15)
             if win32gui.GetForegroundWindow() == hwnd:
                 return True
+        except Exception:
+            pass
+
+        # Method 3: Click title bar center (guaranteed activation)
+        try:
+            rect = win32gui.GetWindowRect(hwnd)
+            if rect:
+                cx = (rect[0] + rect[2]) // 2
+                pyautogui.click(cx, rect[1] + 10)
+                safe_sleep(0.3)
+                return win32gui.GetForegroundWindow() == hwnd
         except Exception:
             pass
 

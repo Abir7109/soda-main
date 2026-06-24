@@ -936,8 +936,8 @@ def _dispatch(tool, args):
             return {"success": False, "error": f"control_music failed: {e}"}
     elif tool == "search_music":
         try:
-            from spotify_bridge import search_music as _sm
-            log(f"[Music] Calling spotify_bridge.search_music(query='{args.get('query', '')}')")
+            from spotify_workflow import search_music as _sm
+            log(f"[Music] Calling spotify_workflow.search_music(query='{args.get('query', '')}')")
             result = _sm(args.get("query", ""))
             log(f"[Music] search_music result: {len(result.get('results', []))} results")
             if result.get("success") and result.get("results"):
@@ -955,10 +955,10 @@ def _dispatch(tool, args):
             return {"success": False, "error": f"search_music failed: {e}"}
     elif tool == "play_music_result":
         try:
-            from spotify_bridge import play_music_result as _pmr
+            from spotify_workflow import play_music_result as _pmr
             q = args.get("query", "")
             i = args.get("index", 1)
-            log(f"[Music] Calling spotify_bridge.play_music_result(query='{q}', index={i})")
+            log(f"[Music] Calling spotify_workflow.play_music_result(query='{q}', index={i})")
             result = _pmr(q, i)
             log(f"[Music] play_music_result result: {result}")
             if result.get("success") and result.get("now_playing"):
