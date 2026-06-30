@@ -122,13 +122,14 @@ Colors, typography, and spacing are defined as CSS custom properties in
 - 11 animated workflow components (startup, morning, outside, etc.)
 
 ### Audio Pipeline (Echo-Safe)
-- `listen_audio()`: mic input buffered while `_model_is_speaking`; buffer flushed when model stops
-- `play_audio()`: sets `_model_is_speaking = False` when `audio_in_queue` empty for 0.2s
-- `receive_audio()`: sets `_model_is_speaking = True` on first audio data chunk
+- `listen_audio()`: mic input accepted only when `_model_is_speaking == False`; during model playback mic is muted to prevent echo
+- `play_audio()`: tracks `silent_ticks` (0.5s per empty wait). Clears `_model_is_speaking` after 8 silent ticks (4s) when no tools are running. **Reset behavior**: when `_tools_running` transitions True→False, `silent_ticks` resets to 0 to give Gemini a fresh 4s window to respond to tool results.
+- `receive_audio()`: sets `_model_is_speaking = True` on first audio data chunk. After sending tool responses, explicitly sets `_model_is_speaking = True` to keep mic muted during the post-tool grace period.
+- `_tools_running`: guards `_model_is_speaking` from premature timeout during tool execution. Tracks whether tool dispatch is in progress; `play_audio()` checks this before clearing the speaking flag.
 - `_clear_queues()`: clears `video_queue` and `_audio_buffer` when Gemini starts responding (preserves `audio_queue` — pending user audio continues to drain)
-- VAD threshold: `VAD_THRESHOLD = 150` RMS
+- VAD threshold: `VAD_THRESHOLD = 400` RMS
 - Server-side VAD enabled: `automatic_activity_detection` with `start_of_speech_sensitivity=0.5`, `end_of_speech_sensitivity=0.5`, `prefix_padding_ms=500`, `silence_duration_ms=1000`
-- Interruption/barge-in is NOT implemented in current audio pipeline (mic fully muted during playback)
+- Interruption/barge-in is NOT implemented (mic fully muted during playback). Commands given during playback are lost — wait for S.O.D.A. to finish speaking.
 
 ### Latency Optimization (Critical)
 - `session.send()` is **deprecated** — use `send_realtime_input(audio=Blob(...))` for live audio (same websocket message, skips ordering guarantees for faster processing)
@@ -138,34 +139,8 @@ Colors, typography, and spacing are defined as CSS custom properties in
 - `AudioTranscriptionConfig.languageCode` is NOT sent through pydantic serialization (LiveConnectParameters caches original schema — extra fields stripped)
 - `context_window_compression` should be omitted entirely — low `trigger_tokens` adds latency on every turn
 
-### Spotify Playback (Spicetify Bridge — see final architecture below)
-
 ### Key Notes
 - `npm run dev` uses `py -3.11` — default `python` (3.12+) crashes `server.py`
 - Electron `<webview>` requires `webviewTag: true` in `electron/main.js`
 - News RSS fails often; DDG HTML scraping is fallback via `_parse_ddg_html()`
 - `get_news` handler has 5s cooldown (`_last_news_briefing`)
-
-### Spotify Bridge (Final Architecture)
-
-**Spicetify extension** at `%LOCALAPPDATA%\spicetify\Extensions\soda_spotify_bridge.js`:
-- Connects to Python WebSocket server at `ws://127.0.0.1:18920` (server binds `0.0.0.0` for all-interface access)
-- Loads inside Spotify's CEF browser via Spicetify injection
-- **Playback control**: Uses `Spicetify.Player` API — `playUri()`, `togglePlay()`, `next()`, `back()`, `setVolume()`
-- **Search**: Uses Pathfinder GraphQL API via **direct `fetch()`** (CosmosAsync skips auth for `api-partner.spotify.com`)
-  - Auth token from `Spicetify.Platform.AuthorizationAPI.getState().token.accessToken`
-  - Query operation `searchDesktop` with SHA-256 hash `4801118d4a100f756e833d33984436a3899cff359c532f8fd3aaf174b60b3b49`
-  - URL: `https://api-partner.spotify.com/pathfinder/v1/query?operationName=searchDesktop&variables=...&extensions=...`
-  - Normalizes Pathfinder response → Web API format (`tracks.items[].{name,artists,album,uri,id}`)
-
-**Python bridge** at `backend/spotify_bridge.py`:
-- Starts `websockets.serve` on port 18920 (`0.0.0.0` / all interfaces) in background thread
-- Suppresses websockets.server logs to CRITICAL to ignore non-WebSocket HEAD probes on the port
-- `_send_command()` sends JSON over WebSocket, blocks on `threading.Event` for response
-- Public API: `search()`, `play_track()`, `play_uri()`, `play_music()`, `play_pause()`, `resume()`, `next_track()`, `previous_track()`, `set_volume()`, `get_status()`
-
-**No UI automation** — no pyautogui, no OCR, no screen coordinates.
-**No Playwright** — all token acquisition goes through Spicetify's in-app session.
-**No rate limits** — Pathfinder uses desktop session auth, separate pool from `api.spotify.com`.
-**Spicetify CLI**: `spicetify apply --bypass-admin` then `spicetify restart` to load patched app.
-**Refresh after extension changes**: `spicetify refresh -e` then `spicetify restart`.

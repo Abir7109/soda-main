@@ -74,7 +74,6 @@ LOCAL_TOOLS = [
     "keyboard_type", "keyboard_press", "keyboard_hotkey",
     "window_focus", "window_list", "window_move",
     "window_manage", "window_get_info",
-    "play_music", "control_music",
     "send_whatsapp", "whatsapp_find_and_call", "whatsapp_find_and_message",
     "send_telegram_message", "send_telegram_file",
     "get_active_window", "list_processes", "process_kill",
@@ -381,7 +380,6 @@ def _dispatch(tool, args):
             "whatsapp": "whatsapp://",
             "telegram": "tg://",
             "discord": "discord://",
-            "spotify": "spotify://",
             "zoom": "zoommtg://",
             "teams": "msteams://",
             "skype": "skype://",
@@ -416,7 +414,6 @@ def _dispatch(tool, args):
             "vscode": ["code.exe"],
             "visual studio code": ["code.exe"],
             "whatsapp": ["WhatsApp.exe", os.path.expandvars(r"%LOCALAPPDATA%\WhatsApp\WhatsApp.exe")],
-            "spotify": ["Spotify.exe", os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe"), os.path.expandvars(r"%LOCALAPPDATA%\Spotify\Spotify.exe"), os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\Spotify.exe")],
             "discord": ["Discord.exe"],
             "slack": ["slack.exe"],
             "zoom": ["Zoom.exe"],
@@ -892,89 +889,6 @@ def _dispatch(tool, args):
             except Exception as e:
                 return {"success": False, "error": str(e)}
         return {"success": False, "error": "pygetwindow or pywin32 required"}
-
-    # ── Music ──────────────────────────────────────────────────────
-    elif tool == "play_music":
-        try:
-            from spotify_bridge import play_music as _pm
-
-            def _emit_now_playing(payload):
-                try:
-                    sio.emit("status", {"message": "now_playing", "data": payload.get("data", {})})
-                except Exception:
-                    pass
-
-            log(f"[Music] Calling spotify_bridge.play_music(query='{args.get('query', '')}')")
-            result = _pm(args.get("query", ""), emit_callback=_emit_now_playing)
-            log(f"[Music] play_music result: {result}")
-            if result.get("success") and result.get("now_playing"):
-                try:
-                    sio.emit("now_playing", result["now_playing"])
-                except Exception:
-                    pass
-            return result
-        except Exception as e:
-            log(f"[Music] play_music failed: {e}")
-            log(traceback.format_exc())
-            return {"success": False, "error": f"play_music failed: {e}"}
-    elif tool == "control_music":
-        action = args.get("action", "")
-        try:
-            from spotify_bridge import play_pause, next_track, previous_track
-            if action == "play_pause":
-                log(f"[Music] control_music(action='play_pause') -> calling _send_media_key(0xB3)")
-                play_pause()
-            elif action == "next":
-                log(f"[Music] control_music(action='next') -> calling _send_media_key(0xB0)")
-                next_track()
-            elif action == "previous":
-                log(f"[Music] control_music(action='previous') -> calling _send_media_key(0xB1)")
-                previous_track()
-            else:
-                return {"success": False, "error": f"Unknown action: {action}"}
-            log(f"[Music] control_music({action}) completed successfully")
-            return {"success": True, "result": f"Music {action}."}
-        except Exception as e:
-            log(f"[Music] control_music failed: {e}")
-            log(traceback.format_exc())
-            return {"success": False, "error": f"control_music failed: {e}"}
-    elif tool == "search_music":
-        try:
-            from spotify_workflow import search_music as _sm
-            log(f"[Music] Calling spotify_workflow.search_music(query='{args.get('query', '')}')")
-            result = _sm(args.get("query", ""))
-            log(f"[Music] search_music result: {len(result.get('results', []))} results")
-            if result.get("success") and result.get("results"):
-                try:
-                    sio.emit("spotify_search_results", {
-                        "query": args.get("query", ""),
-                        "results": result["results"],
-                    })
-                except Exception:
-                    pass
-            return result
-        except Exception as e:
-            log(f"[Music] search_music failed: {e}")
-            log(traceback.format_exc())
-            return {"success": False, "error": f"search_music failed: {e}"}
-    elif tool == "play_music_result":
-        try:
-            from spotify_workflow import play_music_result as _pmr
-            q = args.get("query", "")
-            i = args.get("index", 1)
-            log(f"[Music] Calling spotify_workflow.play_music_result(query='{q}', index={i})")
-            result = _pmr(q, i)
-            log(f"[Music] play_music_result result: {result}")
-            if result.get("success") and result.get("now_playing"):
-                try:
-                    sio.emit("now_playing", result["now_playing"])
-                except Exception:
-                    pass
-            return result
-        except Exception as e:
-            log(f"[Music] play_music_result failed: {e}")
-            log(traceback.format_exc())
-            return {"success": False, "error": f"play_music_result failed: {e}"}
 
     # ── Messaging ──────────────────────────────────────────────────
     elif tool in ("send_whatsapp", "whatsapp_find_and_call", "whatsapp_find_and_message"):

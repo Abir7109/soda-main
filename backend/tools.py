@@ -544,58 +544,6 @@ welcome_home_tool = {
     }
 }
 
-play_music_tool = {
-    "name": "play_music",
-    "description": (
-        "Search and PLAY music on Spotify immediately — skips browsing. "
-        "ONLY use this when the user explicitly says 'just play', 'play without showing', "
-        "'skip the list', or similar phrasing that means skip browsing. "
-        "For ALL normal music requests (play, find, search, listen to, hear), use search_music instead. "
-        "Opens Spotify, searches, and plays the top result. Sets volume to 80%. "
-        "If query is empty, opens Spotify to ask what they'd like. "
-        "When success=True, music is playing. Stop all further tool calls. "
-        "Examples: play_music(query='chill lofi'), play_music(query='')"
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "query": {
-                "type": "STRING",
-                "description": "Search query. Can be empty to just open Spotify. Examples: 'chill lofi', ''"
-            }
-        },
-        "required": ["query"]
-    }
-}
-
-control_music_tool = {
-    "name": "control_music",
-    "description": (
-        "Control Spotify playback — pause, resume, skip tracks, go back. "
-        "Works even when Spotify is minimized or in the background, no window focus needed. "
-        "Understand the user's intent: 'pause' / 'stop music' → play_pause, "
-        "'next song' / 'skip' / 'change' → next, "
-        "'previous' / 'go back' → previous. "
-        "Any natural phrasing for playback control maps to this tool. "
-        "IMPORTANT: Only call this when the user explicitly asks to control playing music. "
-        "Do NOT call this after play_music returns success — the music is already playing. "
-        "Do NOT call play_music for playback control — use this instead. "
-        "Actions: 'play_pause' (toggle), 'next' (skip forward), 'previous' (skip back). "
-        "Examples: control_music(action='play_pause'), control_music(action='next'), "
-        "control_music(action='previous')"
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "'play_pause' to toggle play/pause, 'next' to skip forward, 'previous' to skip back"
-            }
-        },
-        "required": ["action"]
-    }
-}
-
 control_system_tool = {
     "name": "control_system",
     "description": (
@@ -622,57 +570,6 @@ control_system_tool = {
             "value": {"type": "STRING", "description": "Value for volume_set, brightness_set, open_app, type_text, press_key"}
         },
         "required": ["action"]
-    }
-}
-
-search_music_tool = {
-    "name": "search_music",
-    "description": (
-        "DEFAULT tool for ANY music request — search and browse Spotify without auto-playing. "
-        "Whether the user says 'play', 'search', 'find', 'browse', 'listen to', 'hear', "
-        "'show me', 'I want' — ALWAYS call this first for any music/song/playlist/artist/genre request. "
-        "Only use play_music instead when the user explicitly says 'just play' / 'skip browsing'. "
-        "Opens Spotify, searches, screenshots results, and extracts them via AI Vision. "
-        "Returns structured results (title + type) for user selection. "
-        "After calling this, the user picks a number and you call play_music_result. "
-        "Examples: search_music(query='lofi'), search_music(query='Ed Sheeran'), "
-        "search_music(query='bollywood hits'), search_music(query='study music')"
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "query": {
-                "type": "STRING",
-                "description": "Search query — genre, mood, artist, song, or playlist name. Examples: 'chill lofi', 'bollywood hits', 'Ed Sheeran'"
-            }
-        },
-        "required": ["query"]
-    }
-}
-
-play_music_result_tool = {
-    "name": "play_music_result",
-    "description": (
-        "Play a specific search result from a previous search_music call. "
-        "Navigates to the result at the given position (1-based), opens it, and clicks play. "
-        "Use this when the user picks a result by number from the search list. "
-        "The query parameter should match the query from the search_music call that produced these results. "
-        "Examples: play_music_result(query='lofi', index=2) — plays the second result. "
-        "play_music_result(query='bollywood hits', index=1) — plays the first result."
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "query": {
-                "type": "STRING",
-                "description": "The search query from the original search_music call — reuses same search to find the result"
-            },
-            "index": {
-                "type": "INTEGER",
-                "description": "1-based index of the result to play (1 = first result, 2 = second result, etc.)"
-            }
-        },
-        "required": ["query", "index"]
     }
 }
 
@@ -1610,11 +1507,7 @@ tools_list = [{"function_declarations": [
     webview_action_tool,
     take_photo_tool,
     welcome_home_tool,
-    play_music_tool,
-    control_music_tool,
     control_system_tool,
-    search_music_tool,
-    play_music_result_tool,
     *FEELINGS_TOOLS_SCHEMA,
     *IELTS_TOOLS,
     pentest_target_tool,

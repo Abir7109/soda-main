@@ -183,7 +183,6 @@ _APP_ALIASES = {
     "discord": "Discord",
     "telegram": "Telegram",
     "whatsapp": "WhatsApp",
-    "spotify": "Spotify",
     "teams": "msteams",
     "zoom": "Zoom",
     "word": "winword",

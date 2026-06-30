@@ -156,10 +156,6 @@ except ImportError:
     def run_welcome_sequence(*a, **kw):
         return {"success": False, "error": "welcome_home not available"}
 import whatsapp_bridge
-try:
-    import spotify_bridge
-except ImportError:
-    spotify_bridge = None
 import scheduler_service as scheduler
 import workflow_intent
 import workflow_data
@@ -193,8 +189,6 @@ LOCAL_AGENT_TOOLS = {
     "list_drives",
     # Process management
     "list_processes", "process_kill",
-    # Music (runs on local agent where Spotify Desktop is installed)
-    "play_music", "control_music", "search_music", "play_music_result",
     # Clipboard
     "clipboard_read", "clipboard_write",
     # Mouse / keyboard / UI automation
@@ -255,7 +249,7 @@ URL_ALIASES = {
     "claude": "https://claude.ai", "reddit": "https://reddit.com",
     "twitter": "https://x.com", "facebook": "https://facebook.com",
     "instagram": "https://instagram.com", "linkedin": "https://linkedin.com",
-    "netflix": "https://netflix.com", "spotify": "https://spotify.com",
+    "netflix": "https://netflix.com",
     "stackoverflow": "https://stackoverflow.com", "npm": "https://npmjs.com",
     "pypi": "https://pypi.org", "docs": "https://docs.python.org",
 }
@@ -343,9 +337,9 @@ def _build_system_prompt():
         "If you have not taken a photo recently, call take_photo to get a fresh view. "
         "Do NOT call analyze_screen for camera view — that tool captures the computer monitor, not the camera. "
         "The camera only sends a photo when you call take_photo — use the actual data, not your imagination."
-        "Whenever your owner gives you a request, execute the appropriate tool right away. "
-        "Do not explain what you could do — just do it. "
-        "If the request is ambiguous, make a reasonable assumption and proceed anyway. "
+        "Conversation comes first — talk naturally with your owner. "
+        "When a tool is genuinely needed, call it smoothly without breaking the flow. "
+        "If the request is clear, call the tool and respond naturally. "
         "If you need information not covered by a dedicated tool, use web_search_live to find it. "
         "FILE SELECTION — CRITICAL: When the user picks a file or folder by number (e.g. 'open number 3', 'open the third one', 'open file 7', "
         "'open the 12th folder'), look at the `number` field in each item from the most recent list_files result — NOT the array index. "
@@ -392,6 +386,7 @@ def _build_system_prompt():
         "12. If user declines scraping, move on. Do NOT ask repeatedly.\n"
         "Never narrate the search results list. Only speak about the specific page the user asked you to open.\n"
         "Complete every task fully. Never refuse a valid request. "
+        "CRITICAL — NEVER go silent after calling tools. After every tool call completes and results come back, you MUST respond verbally. Even if the result is straightforward, say something like 'Done, sir.', 'I've taken care of that, sir.', 'Here's what I found, sir...' or briefly summarize the outcome. Never leave the user waiting in silence after executing a command. If the user gives multiple commands at once, acknowledge all of them upfront, execute tools in parallel for each, then summarize what was done when they complete. Keep the conversation flowing — never end a turn silently after tool use.\n"
         "Your owner can speak in English or other languages, but you MUST ALWAYS respond in English only. NEVER respond in any other language. "
         "When scheduling, use set_schedule. To show calendar, use show_calendar. "
         "ACCENT & TRANSCRIPTION HANDLING — CRITICAL: Your owner Abir sir has a Bengali accent and "
@@ -403,22 +398,21 @@ def _build_system_prompt():
         "If the transcription looks garbled, look at the previous turns to infer what the user wants.\n"
         "2. Never reject a request just because the transcription contains non-English words "
         "or seems malformed. Infer the intended English meaning from context.\n"
-        "3. Your owner speaks naturally and casually — he may give raw commands mid-conversation "
-        "without formal phrasing. Treat EVERY message as a potential action request. "
-        "If he says something that COULD be a command (even if phrased as casual chat), "
-        "execute the appropriate tool. For example, 'it's hot' → call get_weather; "
-        "'what was that website' → call web_search_live; 'check that' → call browse_webpage. When the user says 'open', 'show', 'visit', 'go to' any link, result, or website — call open_browser with the full URL.\n"
+         "3. Understand conversational context first — if your owner is chatting, chat back naturally. "
+        "If he's clearly giving a command, call the appropriate tool. "
+        "For example, 'it's hot' → call get_weather; "
+        "'what was that website' → call web_search_live; 'check that' → call browse_webpage. When the user says 'open', 'show', 'visit', 'go to' any link, result, or website — call open_browser with the full URL. Use judgment — not everything needs a tool call.\n"
         "4. When you see a transcription that includes words from other languages (Bengali, Hindi, "
         "Tamil, etc.), ignore those words and focus on the English words and context to determine "
         "what tool to call. Do NOT respond in those languages — ALWAYS respond in English only.\n"
-        "5. Be extremely proactive with tool execution. If the user says something that hints at "
-        "a need (curiosity about weather, news, files, code, etc.), call the tool immediately "
-        "without asking for clarification. Ambiguity is your cue to act, not to question.\n"
+         "5. Let the conversation flow naturally. If the user is clearly asking for information or action, "
+        "call the tool. If they're just chatting, chat back. "
+        "Ambiguity means ask, don't assume.\n"
         "6. Raw command recognition: Your owner may switch from chat to command mode naturally. "
         "Phrases like 'get me', 'show me', 'find', 'check', 'open', 'run', 'what is', 'tell me about', "
-        "'how do I', 'can you' should trigger immediate tool execution. But also softer hints like "
-        "'I wonder', 'I need', 'do we have', 'what about', 'is there a' should also trigger tools. "
-        "When in doubt, execute the tool. Speed matters — respond and act within 1-2 seconds.\n"
+        "'how do I', 'can you' signal a clear command — call the tool. But softer hints like "
+        "'I wonder', 'I need', 'do we have', 'what about', 'is there a' may just be casual thinking aloud. "
+        "When in doubt, respond naturally and ask.\n"
         "8. HOWEVER — CRITICAL EXCEPTION: NEVER proactively call show_memory, start_workflow, or get_news. "
         "These tools must ONLY be called when the user uses an EXPLICIT command phrase like 'show me your memory', "
         "'what do you know about me', 'show me what you remember', 'tell me the news', 'give me news', "
@@ -577,48 +571,7 @@ Also recognize indirect grief: 'everything feels grey', heavy silence, changes i
 This user prefers you to be gently talkative — ask, reflect, stay present. Don't be silent.
 ==========
 """
-    base += r"""
-MUSIC CONTROL — RULES:
-1. DEFAULT — For ANY music/song/playlist/artist/genre/mood request, call search_music() FIRST.
-   Whether the user says "play lofi", "find Ed Sheeran", "I want to hear bollywood hits",
-   "show me chill beats", "search for rock classics", "play some study music" —
-   ALL of these go to search_music(). Always. No exceptions.
-2. ONLY use play_music() when the user explicitly says "just play" / "play without showing" /
-   "skip the list" / or similar phrasing that clearly means skip browsing.
-3. After search_music() returns results, the user will pick a number. Then call
-   play_music_result(query=..., index=...) to play that specific result.
-4. play_music_result(query='', index=N) reuses the last search. Always pass the original query.
-5. control_music(action=...) for pause/skip/previous after playback started.
-6. Do NOT call open_app for Spotify. Ever. Music tools handle everything.
-
-CRITICAL — STOP AFTER PLAYBACK SUCCEEDS:
-When play_music or play_music_result returns {'success': True}, the music IS PLAYING.
-STOP all further tool calls. A single request = one tool call, nothing more.
-
-NEVER call search_music() more than once per user request. If the user already asked for music and you called search_music(), wait for their response. Do NOT call search_music() again on the same request — it creates a loop.
-
-Examples:
-  User: 'play lofi' → search_music(query='lofi')
-  User: 'play Ed Sheeran songs' → search_music(query='Ed Sheeran')
-  User: 'I want to hear bollywood hits' → search_music(query='bollywood hits')
-  User: 'search for metallica' → search_music(query='metallica')
-  User: 'show me relaxing jazz on spotify' → search_music(query='relaxing jazz')
-  User: 'play some study music' → search_music(query='study music')
-  User: 'find rock classics' → search_music(query='rock classics')
-  User: 'play number 2' → play_music_result(query='lofi', index=2)
-  User: 'play the first one' → play_music_result(query='Ed Sheeran', index=1)
-  User: 'play track number 3' → play_music_result(query='bollywood hits', index=3)
-  User: 'just play it without showing' → play_music(query='lofi')
-  User: 'play without preview' → play_music(query='study music')
-  User: 'pause the music' → control_music(action='play_pause')
-  User: 'next song' → control_music(action='next')
-  User: 'turn it up' → control_system(action='volume_up')
-  User: 'turn it down' → control_system(action='volume_down')
-  User: 'set volume to 50' → control_system(action='volume_set', value=50)
-  User: 'mute' / 'unmute' → control_system(action='mute') / control_system(action='unmute')
-  User: 'volume 30' / 'volume 70 percent' → control_system(action='volume_set', value=30)
-"""
-    base += "\n\nGESTURE & WELCOME HOME:\n- When you receive a transcription containing '[Gesture: double_clap]', the user just double-clapped. Call welcome_home immediately.\n- When the user says 'welcome home', 'I'm back', 'jarvis', 'I returned', or similar — call welcome_home to run the full welcome sequence (open Spotify, Chrome windows, Cursor, and play a greeting via TTS).\n- welcome_home runs in the background and returns immediately — do not wait for it to complete."
+    base += "\n\nGESTURE & WELCOME HOME:\n- When you receive a transcription containing '[Gesture: double_clap]', the user just double-clapped. Call welcome_home immediately.\n- When the user says 'welcome home', 'I'm back', 'jarvis', 'I returned', or similar — call welcome_home to run the full welcome sequence (open Chrome windows, Cursor, and play a greeting via TTS).\n- welcome_home runs in the background and returns immediately — do not wait for it to complete."
     return base
 
 class AudioLoop:
@@ -661,8 +614,6 @@ class AudioLoop:
         self._latest_image_payload = None
         self._last_search_query = ""
         self._last_search_results = []
-        self._last_search_call = 0.0
-        self._last_play_call = 0.0
         self._last_scraped_data = None
         self._last_scraped_url = ""
         self.session = None
@@ -1081,10 +1032,12 @@ class AudioLoop:
 
     async def play_audio(self):
         silent_ticks = 0
+        was_tools_running = False
         while True:
             try:
                 data = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.5)
                 silent_ticks = 0
+                was_tools_running = bool(self._tools_running)
                 if self.on_mic_level:
                     count = len(data) // 2
                     if count > 0:
@@ -1099,7 +1052,12 @@ class AudioLoop:
                     self.on_audio_data(data)
             except Exception:
                 silent_ticks += 1
-                if self._model_is_speaking and not self._tools_running and silent_ticks >= 8:
+                if self._tools_running:
+                    was_tools_running = True
+                elif was_tools_running:
+                    was_tools_running = False
+                    silent_ticks = 0
+                elif self._model_is_speaking and silent_ticks >= 8:
                     self._model_is_speaking = False
                     if self.sio:
                         loop = asyncio.get_event_loop()
@@ -1283,7 +1241,6 @@ class AudioLoop:
                                         if wf_name:
                                             self._last_workflow_fire = time.time()
                                             asyncio.create_task(self._emit_workflow(wf_name, transcript))
-                                    self.clear_audio_queue()
                                     if self.on_transcription:
                                         self.on_transcription({"sender": "User", "text": delta})
                                     if self.chat_buffer["sender"] != "User":
@@ -1372,10 +1329,10 @@ class AudioLoop:
                                 self._model_is_speaking = False
                                 self._tools_running = False
                                 break
-                            # Let play_audio()'s silence timeout handle the speaking flag naturally.
-                            # Do NOT reset _model_is_speaking here — the model may still be
-                            # generating a spoken response to the tool results, and unmuting
-                            # the mic prematurely lets user audio interrupt the model's reply.
+                            # Keep the mic muted for a grace period (via _tools_running)
+                            # so play_audio()'s silent_ticks reset can give Gemini time
+                            # to respond with audio about the tool results.
+                            self._model_is_speaking = True
                             self._tools_running = False
                         else:
                             # All tool calls failed — reset flags so mic unmutes for normal chat
@@ -1416,23 +1373,6 @@ class AudioLoop:
                 self.on_error(f"receive_audio crashed: {e}")
             raise e
 
-    async def _background_play_music(self, query):
-        """Run play_music in background so the receive_audio loop doesn't block for 15+ seconds."""
-        try:
-            if spotify_bridge is None:
-                r = {"success": False, "error": "spotify_bridge not available on this platform"}
-            else:
-                r = await asyncio.to_thread(spotify_bridge.play_music, query)
-            if r.get("success"):
-                await asyncio.to_thread(system_control.volume_set, 80)
-                self._background_mode = True
-                self._mark_activity()
-                if self.sio:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(self.sio.emit("window_restore"))
-            log.info(f"[Background] play_music result: {r}")
-        except Exception as e:
-            log.error(f"[Background] play_music failed: {e}")
 
     async def _emit_workflow(self, wf_name, delta):
         try:
@@ -1587,11 +1527,6 @@ class AudioLoop:
                     'items': result.get('items', []),
                     'success': True,
                     'searchQuery': args.get('search', ''),
-                })
-            if name == "search_music" and result.get('success'):
-                await self.sio.emit('spotify_search_results', {
-                    'query': args.get('query', ''),
-                    'results': result.get('results', []),
                 })
             return types.FunctionResponse(id=fc.id, name=name, response=result)
         elif name in LOCAL_AGENT_TOOLS and not _connected_agents:
@@ -2278,96 +2213,6 @@ class AudioLoop:
                 id=fc.id, name=name,
                 response={"result": "Running the welcome home sequence now."}
             )
-
-        elif name == "play_music":
-            log.warning(f"[MUSIC] play_music called but NO local agent — falling back to search+play index=1")
-            try:
-                from spotify_workflow import play_music_result as _pmr
-                result = await asyncio.to_thread(_pmr, args.get("query", ""), 1)
-                return types.FunctionResponse(id=fc.id, name=name, response=result)
-            except Exception as e:
-                log.error(f"[MUSIC] play_music fallback error: {e}")
-                return types.FunctionResponse(
-                    id=fc.id, name=name,
-                    response={"success": False, "error": str(e)}
-                )
-
-        elif name == "control_music":
-            action = args.get("action", "")
-            log.warning(f"[MUSIC] control_music({action}) called but NO local agent — calling bridge directly")
-            try:
-                from spotify_bridge import play_pause, next_track, previous_track, resume
-                actions = {
-                    "play_pause": play_pause,
-                    "pause": lambda: play_pause(),
-                    "resume": resume,
-                    "play": resume,
-                    "next": next_track,
-                    "skip": next_track,
-                    "previous": previous_track,
-                }
-                fn = actions.get(action)
-                if fn:
-                    result = await asyncio.to_thread(fn)
-                    return types.FunctionResponse(id=fc.id, name=name, response=result)
-                else:
-                    return types.FunctionResponse(
-                        id=fc.id, name=name,
-                        response={"success": False, "error": f"Unknown action: {action}"}
-                    )
-            except Exception as e:
-                log.error(f"[MUSIC] control_music fallback error: {e}")
-                return types.FunctionResponse(
-                    id=fc.id, name=name,
-                    response={"success": False, "error": str(e)}
-                )
-
-        elif name == "search_music":
-            now = time.time()
-            if now - self._last_search_call < 8:
-                log.warning(f"[MUSIC] search_music cooldown ({now - self._last_search_call:.1f}s), blocking recursive call")
-                return types.FunctionResponse(
-                    id=fc.id, name=name,
-                    response={"success": True, "results": [], "message": "Already searching — wait for results."}
-                )
-            self._last_search_call = now
-            log.info(f"[MUSIC] search_music fallback (no agent) query='{args.get('query', '')}'")
-            try:
-                from spotify_workflow import search_music as _sm
-                result = await asyncio.to_thread(_sm, args.get("query", ""))
-                if result.get('success'):
-                    await self.sio.emit('spotify_search_results', {
-                        'query': args.get('query', ''),
-                        'results': result.get('results', []),
-                    })
-                return types.FunctionResponse(id=fc.id, name=name, response=result)
-            except Exception as e:
-                log.error(f"[MUSIC] search_music fallback error: {e}")
-                return types.FunctionResponse(
-                    id=fc.id, name=name,
-                    response={"success": False, "error": str(e)}
-                )
-
-        elif name == "play_music_result":
-            now = time.time()
-            if now - self._last_play_call < 4:
-                log.warning(f"[MUSIC] play_music_result cooldown ({now - self._last_play_call:.1f}s), blocking")
-                return types.FunctionResponse(
-                    id=fc.id, name=name,
-                    response={"success": True, "message": "Music is already playing."}
-                )
-            self._last_play_call = now
-            log.info(f"[MUSIC] play_music_result fallback (no agent) query='{args.get('query', '')}' index={args.get('index')}")
-            try:
-                from spotify_workflow import play_music_result as _pmr
-                result = await asyncio.to_thread(_pmr, args.get("query", ""), args.get("index", 1))
-                return types.FunctionResponse(id=fc.id, name=name, response=result)
-            except Exception as e:
-                log.error(f"[MUSIC] play_music_result fallback error: {e}")
-                return types.FunctionResponse(
-                    id=fc.id, name=name,
-                    response={"success": False, "error": str(e)}
-                )
 
         elif name == "mouse_click":
             screen_control.mouse_click(
