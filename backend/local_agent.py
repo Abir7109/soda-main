@@ -1532,6 +1532,24 @@ def _heartbeat_loop():
             log(f"[LocalAgent] Disconnected — will auto-reconnect...")
 
 
+def _connect_with_retry():
+    """Connect to backend with exponential backoff retry. Never exits on failure."""
+    retry_delay = 1
+    max_delay = 60
+    while True:
+        try:
+            log(f"[LocalAgent] Connecting to {BACKEND_URL}...")
+            sio.connect(BACKEND_URL, transports=["websocket", "polling"], wait_timeout=10)
+            log(f"[LocalAgent] ✅ Connected")
+            retry_delay = 1
+            return
+        except Exception as e:
+            log(f"[LocalAgent] Connection failed: {e}")
+            log(f"[LocalAgent] Retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, max_delay)
+
+
 if __name__ == "__main__":
     _check_deps()
 
@@ -1549,18 +1567,22 @@ if __name__ == "__main__":
           f"psutil={'OK' if HAS_PSUTIL else 'MISS'}")
     log("=" * 50)
 
-    try:
-        sio.connect(BACKEND_URL, transports=["websocket", "polling"], wait_timeout=10)
-        # Start background threads
-        _start_abort_monitor()
-        threading.Thread(target=_heartbeat_loop, daemon=True).start()
-        log(f"[LocalAgent] ✅ ALIVE — waiting for commands from backend...")
-        log(f"[LocalAgent] 💡 Say something to SODA in the browser, like 'open notepad' or 'list my desktop files'")
-        sio.wait()
-    except KeyboardInterrupt:
-        log("\n[LocalAgent] Shutting down")
-        sio.disconnect()
-    except Exception as e:
-        log(f"[LocalAgent] Failed: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+    while True:
+        try:
+            _connect_with_retry()
+            # Start background threads
+            _start_abort_monitor()
+            threading.Thread(target=_heartbeat_loop, daemon=True).start()
+            log(f"[LocalAgent] ✅ ALIVE — waiting for commands from backend...")
+            log(f"[LocalAgent] 💡 Say something to SODA in the browser, like 'open Notepad' or 'list my desktop files'")
+            sio.wait()
+        except KeyboardInterrupt:
+            log("\n[LocalAgent] Shutting down")
+            sio.disconnect()
+            break
+        except Exception as e:
+            log(f"[LocalAgent] Connection lost: {e}")
+            traceback.print_exc()
+            log(f"[LocalAgent] Reconnecting in 3s...")
+            time.sleep(3)
+            continue

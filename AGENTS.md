@@ -144,3 +144,13 @@ Colors, typography, and spacing are defined as CSS custom properties in
 - Electron `<webview>` requires `webviewTag: true` in `electron/main.js`
 - News RSS fails often; DDG HTML scraping is fallback via `_parse_ddg_html()`
 - `get_news` handler has 5s cooldown (`_last_news_briefing`)
+
+### Local Agent (`backend/local_agent.py`)
+- Standalone Python script connecting to backend via Socket.IO client
+- Runs on the user's Windows PC, registers with `agent_register` event
+- Handles: `open_app`, file ops, mouse/keyboard, screen, terminal, clipboard, messaging
+- **Auto-reconnect**: wraps connection in `_connect_with_retry()` — exponential backoff (1s→60s), never exits on failure
+- **Auto-start install**: `install_agent_service.ps1` — Scheduled Task (at-logon) or startup folder shortcut
+- `run_agent_hidden.vbs` → `py -3.11 backend\local_agent.py` (no console window)
+- `open_app` tool: 7-method cascade (URI → known paths → registry → PATH → Start Menu → AppX → SendKeys)
+- Backend routes `LOCAL_AGENT_TOOLS` via `agent_execute` socket event; 10s timeout per call

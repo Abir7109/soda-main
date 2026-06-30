@@ -2468,8 +2468,18 @@ class AudioLoop:
 
         elif name == "open_app":
             app_name = args.get("app_name", "")
-            result = system_app.open_app(app_name)
-            return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+            if _connected_agents:
+                # Should have been routed to local agent above — safety fallback
+                result = system_app.open_app(app_name)
+                return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+            else:
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": {
+                        "success": False,
+                        "error": "No local agent connected. The local desktop agent must be running on your PC to open applications. Start it with: py -3.11 backend\\local_agent.py"
+                    }}
+                )
 
         elif name == "webview_action":
             loop = asyncio.get_event_loop()
